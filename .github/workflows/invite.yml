@@ -27,10 +27,11 @@ on:
         default: 'feminine'
         type: choice
         options: [feminine, other, all]
-      minutes:
-        description: 'How long to run for (max 350)'
-        required: true
-        default: '350'
+      dry_run:
+        description: 'Check it starts and connects, then stop without inviting anyone'
+        required: false
+        default: false
+        type: boolean
 
 # One inviter at a time. A second run waits rather than putting two bots with
 # the same nick on the network, which is a collision and a rename loop.
@@ -41,7 +42,10 @@ concurrency:
 jobs:
   invite:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ fromJSON(inputs.minutes) }}
+    # Fixed rather than an input. An expression here that fails to parse fails
+    # the whole run before a single line of the bot executes, and 350 is the
+    # ceiling anyway — cancel the run from the Actions page to stop early.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,6 +62,7 @@ jobs:
           RECRUIT_MAX_GAP_MIN: ${{ secrets.RECRUIT_MAX_GAP_MIN || '2' }}
           RECRUIT_REASK_DAYS: ${{ secrets.RECRUIT_REASK_DAYS || '21' }}
           FEMININE_HINTS: ${{ secrets.FEMININE_HINTS }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           node test.js
           node invite.js "${{ inputs.nick }}" "${{ inputs.room }}" "${{ inputs.sources }}"

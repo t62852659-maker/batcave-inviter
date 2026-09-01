@@ -224,6 +224,21 @@ function startUp() {
         return;
     }
     log('OK', `target=${recruiter.target}, from ${recruiter.channels.join(', ')} into ${room}`);
+    // A dry run proves the whole path — connect, register, join, see people —
+    // and stops before anybody is sent anything. Worth having: the alternative
+    // way to find out whether a change works is to invite real strangers with
+    // it, and that cannot be undone.
+    if (/^(1|true|yes|on)$/i.test(process.env.DRY_RUN || '')) {
+        setTimeout(() => {
+            const seen = [...recruiter.channels].map((ch) => {
+                const m = members.get(ch.toLowerCase());
+                return `${ch}: ${m ? m.size : 0}`;
+            }).join(', ');
+            log('OK', `DRY RUN — connected, joined, and can see ${seen}. Nobody invited.`);
+            stop('dry run finished');
+        }, 12000);
+        return;
+    }
     log('INFO', process.stdin.isTTY
         ? 'type  nick <name>  to rename it,  status  to see progress,  help  for the rest'
         : 'no terminal here — the nick is fixed for this run; start another to change it.');
