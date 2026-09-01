@@ -34,13 +34,21 @@ function run(env, done, opts) {
         sock.on('error', () => {});
         const w = (l) => { try { sock.write(l + '\r\n'); } catch (e) { /* gone */ } };
         let buf = '';
+        let opened = false;
+        let botNick = 'D';
         sock.on('data', (d) => {
             buf += d;
             const lines = buf.split('\r\n');
             buf = lines.pop();
             for (const l of lines) {
                 sent.push(l);
-                if (/^NICK/.test(l)) { w(':srv 001 D :hi'); w(':srv 376 D :end'); }
+                // ONLY the first NICK is registration. Answering a later one
+                // with 001/376 fakes a whole reconnect, so startUp ran twice
+                // and the bot re-announced itself — a fixture bug that looked
+                // exactly like a bot restarting for no reason.
+                if (/^NICK/.test(l) && sent.filter((x) => /^NICK /.test(x)).length === 1) {
+                    w(':srv 001 D :hi'); w(':srv 376 D :end');
+                }
                 const j = l.match(/^JOIN (\S+)/);
                 if (j) w(`:D!u@h JOIN ${j[1]}`);
                 const rn = l.match(/^NICK (\S+)/);
@@ -48,7 +56,7 @@ function run(env, done, opts) {
                     // A real ircd confirms a rename by echoing it. Taken names
                     // answer 433 instead — both are exercised below.
                     if (/taken/i.test(rn[1])) w(`:srv 433 D ${rn[1]} :Nickname is already in use`);
-                    else w(`:D!u@h NICK :${rn[1]}`);
+                    else { w(`:${botNick}!u@h NICK :${rn[1]}`); botNick = rn[1]; }
                 }
                 const nm = l.match(/^NAMES (\S+)/);
                 if (nm) {
@@ -57,6 +65,26 @@ function run(env, done, opts) {
                         ? `:srv 353 D = ${chan} :@D`
                         : `:srv 353 D = ${chan} :@D ${CROWD.join(' ')}`);
                     w(`:srv 366 D ${chan} :end`);
+                }
+                // Vampire is identified; Impostor is not. 330 is how the server
+                // says "is logged in as", and it is the only difference between
+                // the owner and somebody wearing the owner's name.
+                const wi = l.match(/^WHOIS (\S+)/);
+                if (wi) {
+                    if (/^vampire$/i.test(wi[1])) w(`:srv 330 D ${wi[1]} vampire :is logged in as`);
+                    w(`:srv 318 D ${wi[1]} :End of WHOIS`);
+                }
+                // The bot idles until told. Everything below this line is the
+                // activation path, which is now the ONLY way it ever invites.
+                if (/^WHOIS Vampire/i.test(l) && !opened) {
+                    opened = true;
+                    // Addressed to whatever the bot is CALLED right now. It was
+                    // hardcoded to "D", so in the rename case the order went to
+                    // a nick the bot no longer had and was correctly ignored —
+                    // the bot was right and the test was wrong.
+                    setTimeout(() => w(`:nobody!u@h PRIVMSG ${botNick} :start`), 900);
+                    setTimeout(() => w(`:Impostor!u@h PRIVMSG ${botNick} :start`), 1200);
+                    setTimeout(() => w(`:Vampire!u@h PRIVMSG ${botNick} :${(opts && opts.say) || 'start'}`), 1600);
                 }
             }
         });
@@ -117,6 +145,21 @@ run({}, (r) => {
     c('solicitation nicks are skipped', !/horny_bull/i.test(r.invites), r.invites);
     c('services are skipped', !/chanserv/i.test(r.invites), r.invites);
     c('masculine nicks are skipped under target=feminine', !/rahul_25/i.test(r.invites), r.invites);
+
+    console.log('\n— only the owner can switch it on —');
+    c('it idles until told, and says so',
+      /idle in #desiadda/.test(r.out) && /DM me "start"/.test(r.out),
+      'a bot that starts working when a runner starts is a bot that works when nobody meant it to');
+    c('a DM from a stranger is ignored', /ignored a DM from nobody/.test(r.out),
+      r.out.split('\n').filter((l) => /nobody/i.test(l)).join(' | ') || '(no sign it was even seen)');
+    c('and so is one from somebody WEARING the owner\'s privileges',
+      /ignored a DM from Impostor/.test(r.out),
+      'the nick is a claim; only the account is proof');
+    c('the identified owner arms it', /armed — recruiting now/.test(r.out),
+      r.out.split('\n').filter((l) => /armed|CMD/.test(l)).join(' | ') || '(never started)');
+    c('and it asked the server who the owner IS before trusting the name',
+      r.sent.some((l) => /^WHOIS Vampire/i.test(l)),
+      'without the account check, anybody can put on that nick and command the bot');
 
     console.log('\n— RECRUIT_TARGET=all, for a room that wants everyone —');
     run({ RECRUIT_TARGET: 'all' }, (a) => {

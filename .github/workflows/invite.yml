@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       nick:
-        description: 'What the bot is called on IRC'
+        description: 'What the bot is called on IRC (it identifies to NickServ as this)'
         required: true
-        default: 'Doorman'
+        default: 'hmmm'
       room:
         description: 'The room it invites people INTO (you need ops there if it is +i)'
         required: true
@@ -27,6 +27,10 @@ on:
         default: 'feminine'
         type: choice
         options: [feminine, other, all]
+      landing:
+        description: 'The room it sits in, idle, waiting to be told to start'
+        required: true
+        default: '#desiadda'
       dry_run:
         description: 'Check it starts and connects, then stop without inviting anyone'
         required: false
@@ -63,6 +67,10 @@ jobs:
           RECRUIT_REASK_DAYS: ${{ secrets.RECRUIT_REASK_DAYS || '21' }}
           FEMININE_HINTS: ${{ secrets.FEMININE_HINTS }}
           DRY_RUN: ${{ inputs.dry_run }}
+          LANDING_ROOM: ${{ inputs.landing }}
+          # Only this nick may command the bot, and only while identified to
+          # services — the nick alone is a claim anybody can make.
+          CONTROLLERS: ${{ secrets.CONTROLLERS || 'Vampire' }}
         run: |
           node test.js
           node invite.js "${{ inputs.nick }}" "${{ inputs.room }}" "${{ inputs.sources }}"

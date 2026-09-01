@@ -61,6 +61,19 @@ const SERVER = process.env.IRC_SERVER || 'irc.hybridirc.com';
 const PORT = Number(process.env.IRC_PORT || 6697);
 const USE_TLS = !/^(0|off|false|no)$/i.test(process.env.IRC_TLS || 'on');
 
+// Where it lands and sits, quietly, until it is told to work.
+const LANDING_ROOM = (process.env.LANDING_ROOM || '#desiadda').trim();
+// Who may tell it. Orders arrive as a private message TO the bot, never in a
+// channel: a command typed in a room is read by the room, and "start inviting
+// from here" is not a thing to announce to the people about to be invited.
+const CONTROLLERS = new Set((process.env.CONTROLLERS || 'Vampire')
+    .split(',').map((n) => n.trim().toLowerCase()).filter(Boolean));
+// It starts IDLE — connected, sitting in the landing room, inviting nobody,
+// until the owner says go. A bot that begins working the moment a runner
+// starts is a bot that works when nobody meant it to, including on a restart
+// six hours later that nobody was watching.
+let armed = false;
+
 // The recruiter reads its source rooms from the environment, so the CLI
 // argument is simply written there before it is constructed.
 if (sources.length) process.env.RECRUIT_CHANNELS = sources.join(',');
@@ -74,6 +87,9 @@ const strip = (l) => (l.startsWith('@') ? l.slice(l.indexOf(' ') + 1) : l);
 let sock = null;
 let me = nick;
 let pendingNick = '';
+// nick(lower) -> services account. A controller's nick alone is not proof:
+// these are unregistered-friendly rooms and anybody can wear a name.
+const accountOf = new Map();
 let stopped = false;
 const members = new Map();     // chan(lower) -> Map(nickLower -> {nick, prefix})
 
@@ -188,6 +204,47 @@ function handle(line) {
         track(chan, who);
         return;
     }
+    // An order, sent privately to the bot.
+    if (p[1] === 'PRIVMSG' && String(params[0] || '').toLowerCase() === me.toLowerCase()) {
+        const text = line.slice(line.indexOf(' :') + 2);
+        const from = who.toLowerCase();
+        const answer = (m) => send(`PRIVMSG ${who} :${m}`);
+        if (!CONTROLLERS.has(from)) {
+            log('WARN', `ignored a DM from ${who} — not a controller.`);
+            return;
+        }
+        // The nick is the claim; the ACCOUNT is the proof. Without this the
+        // only thing between this bot and anybody on the network is a name
+        // anybody on the network can put on — which is the very attack the
+        // main room is defended against.
+        const acct = (accountOf.get(from) || '').toLowerCase();
+        if (!acct) {
+            answer('You are not identified to services, so I cannot tell you from '
+                + 'somebody wearing your name. /msg NickServ IDENTIFY, then try again.');
+            log('WARN', `refused ${who}: the nick matches a controller but has no account.`);
+            send(`WHOIS ${who}`);                            // in case we simply had not asked yet
+            return;
+        }
+        log('CMD', `${who} (${acct}): ${text}`);
+        command(text, answer);
+        return;
+    }
+    if (num === '354' || num === '352') {                    // WHO reply: accounts
+        // 354 with %cuhnar: <me> <chan> <user> <host> <nick> <account>
+        const n2 = num === '354' ? params[4] : params[5];
+        const a2 = num === '354' ? params[5] : '';
+        if (n2) accountOf.set(String(n2).toLowerCase(), (a2 && a2 !== '0') ? a2 : '');
+        return;
+    }
+    if (num === '330' && params[1] && params[2]) {           // WHOIS "is logged in as"
+        accountOf.set(String(params[1]).toLowerCase(), params[2]);
+        return;
+    }
+    if (p[1] === 'ACCOUNT') {                                // account-notify
+        const a3 = (params[0] || '').replace(/^:/, '');
+        accountOf.set(who.toLowerCase(), a3 === '*' ? '' : a3);
+        return;
+    }
     if (p[1] === 'PART' || p[1] === 'KICK') {
         const chan = (params[0] || '').replace(/^:/, '');
         const target = p[1] === 'KICK' ? (params[1] || '') : who;
@@ -216,6 +273,7 @@ function handle(line) {
 }
 
 function startUp() {
+    if (LANDING_ROOM) { send(`JOIN ${LANDING_ROOM}`); send(`WHO ${LANDING_ROOM}`); }
     send(`JOIN ${room}`);
     send(`NAMES ${room}`);
     for (const c of recruiter.channels) { send(`JOIN ${c}`); send(`NAMES ${c}`); }
@@ -239,10 +297,13 @@ function startUp() {
         }, 12000);
         return;
     }
+    // Learn the controllers' accounts up front, so the first order does not
+    // have to be refused while we go and ask.
+    for (const cn of CONTROLLERS) send(`WHOIS ${cn}`);
     log('INFO', process.stdin.isTTY
-        ? 'type  nick <name>  to rename it,  status  to see progress,  help  for the rest'
-        : 'no terminal here — the nick is fixed for this run; start another to change it.');
-    recruiter.start(log);
+        ? 'type  start  to begin,  help  for the rest'
+        : `idle in ${LANDING_ROOM}. DM me "start" — only ${[...CONTROLLERS].join(', ')} `
+          + 'is listened to, and only while identified to services.');
     // The member lists go stale as people come and go; refresh them the way
     // the live bot does rather than trusting one NAMES from startup.
     setInterval(() => {
@@ -257,52 +318,75 @@ function startUp() {
 // starts recognising the bot, or an operator asks it to be less obvious — and
 // restarting to do that throws away the recruiter's memory of who it has
 // already asked, so everybody gets invited a second time.
-function command(line) {
+function command(line, reply) {
+    const out = reply || ((m) => log('INFO', m));
     const [cmd, ...rest] = String(line).trim().split(/\s+/);
     const arg = rest.join(' ').trim();
     switch ((cmd || '').toLowerCase()) {
         case '':
             return;
         case 'nick': {
-            if (!arg) { log('INFO', 'usage: nick <newname>'); return; }
+            if (!arg) { out('usage: nick <newname>'); return; }
             if (!/^[A-Za-z\[\]\\`_^{|}][A-Za-z0-9\[\]\\`_^{|}-]{0,29}$/.test(arg)) {
-                log('WARN', `"${arg}" is not a valid IRC nick — letters first, no spaces.`);
+                out(`"${arg}" is not a valid IRC nick — letters first, no spaces.`);
                 return;
             }
             pendingNick = arg;
-            log('INFO', `asking the server for ${arg}…`);
+            out(`asking the server for ${arg}…`);
             send(`NICK ${arg}`);
             return;
         }
         case 'status':
-            log('INFO', `${me} | into ${room} | from ${recruiter.channels.join(', ')} `
+            out(`${me} | into ${room} | from ${recruiter.channels.join(', ')} `
                 + `| target=${recruiter.target} | asked ${recruiter.invited.size} so far`);
             if (recruiter.recent && recruiter.recent.length) {
-                log('INFO', `recent: ${recruiter.recent.slice(-5).join(', ')}`);
+                out(`recent: ${recruiter.recent.slice(-5).join(', ')}`);
             }
             return;
         case 'who':
             for (const c of recruiter.channels) {
                 const m = members.get(c.toLowerCase());
-                log('INFO', `${c}: ${m ? m.size : 0} people visible`);
+                out(`${c}: ${m ? m.size : 0} people visible`);
             }
             return;
         case 'target': {
             if (!/^(feminine|other|all)$/i.test(arg)) {
-                log('INFO', `target is ${recruiter.target} — use: target feminine|other|all`);
+                out(`target is ${recruiter.target} — use: target feminine|other|all`);
                 return;
             }
             recruiter.target = arg.toLowerCase();
-            log('OK', `now inviting: ${recruiter.target}`);
+            out(`now inviting: ${recruiter.target}`);
             return;
         }
+        case 'start':
+        case 'go':
+            if (armed) { out('already running.'); return; }
+            armed = true;
+            recruiter.start(log);
+            out(`started — ${recruiter.target}, from ${recruiter.channels.join(', ')} into ${room}`);
+            log('OK', 'armed — recruiting now.');
+            return;
+        case 'pause':
+            if (!armed) { out('not running.'); return; }
+            armed = false;
+            // Cancel the recruiter's own timers. Setting a flag without this
+            // leaves the rounds firing on schedule into a bot that believes it
+            // has stopped — the difference between paused and pretending.
+            for (const t of Object.values(recruiter.timers || {})) {
+                try { clearTimeout(t); clearInterval(t); } catch (e) { /* already gone */ }
+            }
+            out('paused — still here, inviting nobody. Say "start" to resume.');
+            log('OK', 'paused.');
+            return;
         case 'quit':
         case 'stop':
-            stop('you typed quit');
+            out('leaving.');
+            stop('told to stop');
             return;
         case 'help':
         default:
-            log('INFO', 'commands: nick <name> | target feminine|other|all | status | who | quit');
+            out('commands: start | pause | nick <name> | target feminine|other|all '
+                + '| status | who | quit');
     }
 }
 
