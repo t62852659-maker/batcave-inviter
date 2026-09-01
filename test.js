@@ -65,6 +65,16 @@ function run(env, done, opts) {
         const bot = spawn(process.execPath, [path.join(__dirname, 'invite.js'), 'D', ROOM, SRC], {
             env: {
                 ...process.env,
+                // Neutralise the REAL configuration before it leaks in.
+                //
+                // The workflow runs these tests with the live settings in the
+                // environment, so `...process.env` carried DRY_RUN=true into
+                // every case — the bot stopped before inviting anyone and
+                // three assertions failed on CI while passing locally. Nothing
+                // was wrong with the bot; the harness was being configured by
+                // the job that ran it.
+                DRY_RUN: '', RECRUIT_ON: 'on', RECRUIT_CHANNELS: '',
+                RECRUIT_TARGET: 'feminine', FEMININE_HINTS: '', NICKSERV_PASS: '',
                 IRC_SERVER: '127.0.0.1', IRC_PORT: String(server.address().port), IRC_TLS: '0',
                 RECRUIT_FIRST_MIN: '0', RECRUIT_MIN_GAP_MIN: '0', RECRUIT_MAX_GAP_MIN: '0',
                 RECRUIT_PER_ROUND: '9', RECRUIT_ANNOUNCE_MIN: '9999',
