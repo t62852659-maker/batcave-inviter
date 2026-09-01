@@ -1,82 +1,74 @@
-# invite.js — a local room inviter
+# invite.js — a room inviter and light moderator
 
-Runs on your machine, no dependencies. It sits in busy rooms and invites
-people to your room — choosing them with **Dracula's actual recruiter**.
+Runs on GitHub Actions. Nothing to start from a terminal, no password, no
+account. It comes up, sits in a room, and waits for you.
 
-`recruit.js` here is a byte-for-byte copy of the file the live bot runs, and
-`invite.js` imports it rather than reimplementing it, so "the same method to
-find whom to invite" is true by construction. The test asserts the copy has
-not drifted from the live file.
+## Using it
 
-Same name lists, same reading of self-labels like "23f", same refusal of
-solicitation nicks, same 21-day memory so nobody is asked twice, and the same
-hard skip of any nick that reads as underage.
+It joins as **hmmm** (or `hmmm1`, `hmmm2` if that name is taken) and sits in
+the landing room doing nothing at all until told.
 
-## Run it
-
-```
-node invite.js <nick> <#room> "#source,#source"
-```
+Everything is a private message to it, and only **Vampire** and **Vikram** are
+listened to — and only while you are identified to NickServ. Your nick is a
+claim; your account is the proof, and this room has been attacked by people
+wearing other people's names.
 
 ```
-node invite.js Doorman "#myroom" "#lobby,#chat"
+/msg hmmm !help
 ```
 
-Quote the room names — `#` starts a comment in the shell. Source rooms are
-required: the recruiter only sees people in rooms it has joined.
+| | |
+|---|---|
+| `start` / `pause` | begin or stop inviting |
+| `into #room` | where invitations point |
+| `from #a,#b` | where it looks for people |
+| `target feminine\|other\|all` | who gets invited |
+| `mod on` / `mod off` | moderate rooms where it holds ops |
+| `nick <name>` | rename it, keeping its memory of who it has asked |
+| `status` / `who` | what it is doing, who it can see |
+| `quit` | end this run |
 
-Stop it with Ctrl+C. It says how many it invited on the way out.
+## Getting it into a room
 
-## You must be able to invite
-
-If your room is invite-only (`+i`), **you need ops in it** or the server
-refuses every invite with 482. Op yourself first:
-
-```
-/msg ChanServ OP #myroom Doorman
-```
-
-The bot stops and tells you in plain words if this is the problem, rather than
-inviting into a wall for an hour.
-
-## Settings (all optional)
-
-| variable | default | what it does |
-|---|---|---|
-| `IRC_SERVER` | `irc.hybridirc.com` | which network |
-| `IRC_PORT` | `6697` | TLS port |
-| `NICKSERV_PASS` | — | identify on connect, if the nick is registered |
-| `RECRUIT_TARGET` | `feminine` | `feminine` (same as Dracula), `other`, or `all` |
-| `RECRUIT_PER_ROUND` | `3` | how many per round |
-| `RECRUIT_MIN_GAP_MIN` / `RECRUIT_MAX_GAP_MIN` | `1` / `2` | minutes between rounds |
-| `RECRUIT_REASK_DAYS` | `21` | do not ask the same person again within this |
-| `FEMININE_HINTS` | — | extra names, comma separated |
+Invite it and op it by hand — it follows invitations from Vampire and Vikram
+and ignores everyone else's:
 
 ```
-RECRUIT_TARGET=all node invite.js Doorman "#myroom" "#lobby"
+/invite hmmm #yourroom
+/msg ChanServ OP #yourroom hmmm
+/msg hmmm into #yourroom
+/msg hmmm start
 ```
 
-`feminine` is the default because that is what Dracula uses. For a general
-room you probably want `all`.
+**Ops matter.** An invite-only room refuses invitations from anybody who is not
+an operator, and moderation does nothing at all without them. The bot says so
+plainly rather than working silently and achieving nothing.
 
-## Why it is slow on purpose
+## Who it invites
 
-Mass-inviting strangers is the fastest way to get an address banned from an IRC
-network, and this runs from **your** address, not a disposable cloud runner.
-The GitHub fleet earned this today doing less than this could:
+`recruit.js` is a byte-for-byte copy of the file the live bot runs, imported
+rather than reimplemented, so the choice of who to invite is identical — the
+same name lists, the same reading of self-labels, the same refusal of
+solicitation nicks, the same 21-day memory, and the same hard skip of any nick
+that reads as underage. The test asserts the copy has not drifted.
 
-```
-Z-lined: Your IP range has been attempting to connect too many times in too
-short a duration.
-```
+## Moderation
 
-So: one invite every 20 seconds, never the same person twice, and if the server
-says anything meaning "stop" it stops and exits instead of arguing. Raising the
-rate raises the risk to your own connection, and a Z-line takes you offline
-along with the bot.
+Off until you say `mod on`, and it only ever acts where it actually holds ops.
+Warn, then kick, then ban. It uses a copy of the live bot's abuse detector, so
+both agree on what counts, and that detector is deliberately conservative: in
+a room full of banter a false positive costs a regular their voice and a miss
+costs a second look. Controllers are never acted on.
 
-Some networks treat invite bots as spam regardless of pacing. This one is
-conservative, not immune.
+## Running
+
+It sits on a ten-minute cron: if the previous run has ended, a fresh one
+starts. Each run lasts up to ~6 hours, then hands over. There is no push
+trigger — editing a comment must never reconnect a live bot.
+
+A new run comes up **idle** and waits to be told again. Set the `AUTO_START`
+secret to `on` if you would rather it resume inviting by itself after each
+handover.
 
 ## Test it
 
@@ -84,13 +76,7 @@ conservative, not immune.
 node test.js
 ```
 
-Spawns the real script against a fake IRC server and checks that the copy of
-`recruit.js` matches the live one, that a listed name is invited, that a
-masculine nick is skipped under the default target and invited under `all`,
-that solicitation nicks and services are skipped, and — in both targets — that
-a nick self-labelling as underage is never invited.
-
-That last one found a real bug in the LIVE bot: "f16delhi" was being invited,
-because the filter required a non-alphanumeric character after the age, so an
-age glued straight to a word walked through while "15f_mumbai" was caught.
-Fixed in both.
+Spawns the real script against a fake IRC server: that the recruiter copy
+matches the live one, who gets invited and who never does, that only an
+identified controller can command it, renaming, the numbered fallback when the
+name is taken, and that it refuses to act in rooms where it has no ops.

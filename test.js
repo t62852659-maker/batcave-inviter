@@ -101,7 +101,7 @@ function run(env, done, opts) {
                 // three assertions failed on CI while passing locally. Nothing
                 // was wrong with the bot; the harness was being configured by
                 // the job that ran it.
-                DRY_RUN: '', RECRUIT_ON: 'on', RECRUIT_CHANNELS: '',
+                DRY_RUN: '', AUTO_START: '', RECRUIT_ON: 'on', RECRUIT_CHANNELS: '',
                 RECRUIT_TARGET: 'feminine', FEMININE_HINTS: '', NICKSERV_PASS: '',
                 IRC_SERVER: '127.0.0.1', IRC_PORT: String(server.address().port), IRC_TLS: '0',
                 RECRUIT_FIRST_MIN: '0', RECRUIT_MIN_GAP_MIN: '0', RECRUIT_MAX_GAP_MIN: '0',

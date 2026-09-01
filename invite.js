@@ -22,10 +22,18 @@
 const tls = require('tls');
 const net = require('net');
 const { Recruiter } = require('./recruit.js');
+// A copy of the live bot's abuse detector, imported rather than rewritten, so
+// this agrees with Dracula about what counts. It is deliberately conservative
+// — it catches "maa ki chut" and lets a lot through — because in a room full
+// of banter a false positive costs a regular their voice and a miss costs
+// nothing but a second look.
+const { severeAbuse } = require('./abuse.js');
 
 const argv = process.argv.slice(2);
 const nick = argv[0];
-const room = argv[1];
+// let, not const: the target room is changeable from IRC with "into #room",
+// so the bot never has to be redeployed to point it somewhere else.
+let room = argv[1];
 const sources = (argv[2] || '').split(',').map((s) => s.trim()).filter(Boolean);
 
 if (!nick || !room || !room.startsWith('#')) {
@@ -73,6 +81,13 @@ const CONTROLLERS = new Set((process.env.CONTROLLERS || 'Vampire')
 // starts is a bot that works when nobody meant it to, including on a restart
 // six hours later that nobody was watching.
 let armed = false;
+// Moderation is OFF until switched on, and only ever acts where the bot
+// actually holds ops. A bot that tries to moderate a room it has no power in
+// produces a stream of "you're not channel operator" and nothing else, which
+// reads to everybody watching as the bot being broken.
+let modOn = false;
+const opped = new Set();               // chanKey -> we hold @ here
+const offences = new Map();            // nick(lower) -> how many times
 
 // The recruiter reads its source rooms from the environment, so the CLI
 // argument is simply written there before it is constructed.
@@ -87,6 +102,7 @@ const strip = (l) => (l.startsWith('@') ? l.slice(l.indexOf(' ') + 1) : l);
 let sock = null;
 let me = nick;
 let pendingNick = '';
+let nickTries = 0;
 // nick(lower) -> services account. A controller's nick alone is not proof:
 // these are unregistered-friendly rooms and anybody can wear a name.
 const accountOf = new Map();
@@ -117,7 +133,10 @@ const recruiter = new Recruiter(
             const e = m && m.get(String(n).toLowerCase());
             return e ? e.prefix : '';
         },
-        homeChannel: room,
+        // A getter, not a snapshot: "into #room" changes where invitations
+        // point, and a value copied at construction would keep sending people
+        // to the old room while the bot reported the new one.
+        get homeChannel() { return room; },
     },
 );
 
@@ -153,6 +172,47 @@ function track(chan, raw) {
     const n = String(raw).replace(/^[~&@%+]+/, '');
     if (n) m.set(n.toLowerCase(), { nick: n, prefix });
     members.set(key, m);
+    if (n && n.toLowerCase() === me.toLowerCase()) {
+        if (prefix.includes('@')) opped.add(key); else opped.delete(key);
+    }
+}
+
+/**
+ * Moderate one line, in a room where we actually hold ops.
+ *
+ * Deliberately a ladder and not a hammer: warn, then remove, then keep out.
+ * The owner's standing complaint about the main bot was that "every small
+ * thing is detected as a threat", and the fix there was the same shape —
+ * severe abuse only, and a first offence that costs nothing but a warning.
+ *
+ * Controllers are never acted on, and neither is anybody the recruiter would
+ * have invited: this bot is a guest in most of these rooms.
+ */
+function moderate(chan, from, text) {
+    if (!modOn) return;
+    const key = String(chan).toLowerCase();
+    if (!opped.has(key)) return;                   // no power here; say nothing
+    const k = String(from).toLowerCase();
+    if (CONTROLLERS.has(k) || k === me.toLowerCase()) return;
+    const verdict = severeAbuse(text);
+    if (!verdict || !verdict.severe) return;
+    const n = (offences.get(k) || 0) + 1;
+    offences.set(k, n);
+    log('MOD', `${from} in ${chan}: ${verdict.why} (offence ${n})`);
+    if (n === 1) {
+        send(`NOTICE ${from} :[MOD] ${verdict.why} — that is your one warning. `
+            + 'Say it again here and you are out.');
+        return;
+    }
+    if (n === 2) {
+        send(`KICK ${chan} ${from} :${verdict.why} — you were warned`);
+        return;
+    }
+    send(`MODE ${chan} +b ${from}!*@*`);
+    send(`KICK ${chan} ${from} :${verdict.why} — third time`);
+    for (const cn of CONTROLLERS) {
+        send(`PRIVMSG ${cn} :[MOD] banned ${from} from ${chan}: ${verdict.why}`);
+    }
 }
 
 function handle(line) {
@@ -170,8 +230,14 @@ function handle(line) {
             pendingNick = '';
             return;
         }
-        me = `${me}_`;
-        log('WARN', `name taken — using ${me}`);
+        // hmmm -> hmmm1 -> hmmm2, counting from the ORIGINAL name rather than
+        // adding to whatever we tried last. Appending to the last attempt gave
+        // hmmm_, hmmm__, hmmm___ — an underscore trail is what an impersonator
+        // wears, and it grows until the server rejects the length.
+        nickTries += 1;
+        if (nickTries > 20) { stop('every variation of that name is taken', 1); return; }
+        me = `${nick}${nickTries}`;
+        log('WARN', `name taken — trying ${me}`);
         send(`NICK ${me}`);
         return;
     }
@@ -202,6 +268,51 @@ function handle(line) {
         const chan = (params[0] || '').replace(/^:/, '');
         if (who.toLowerCase() === me.toLowerCase()) { log('OK', `joined ${chan}`); return; }
         track(chan, who);
+        return;
+    }
+    // Invited somewhere by one of ours.
+    //
+    // This is how it gets into rooms now: no room list to maintain, no
+    // redeploy — Vampire or Vikram invite it wherever they want it and op it
+    // by hand. Only THEIR invitations are followed; anybody on IRC can send an
+    // INVITE, and a bot that walks into whatever room it is pointed at is a
+    // bot somebody else is steering.
+    if (p[1] === 'INVITE') {
+        const to = (params[1] || params[0] || '').replace(/^:/, '').trim();
+        if (!CONTROLLERS.has(who.toLowerCase())) {
+            log('WARN', `ignored an invite to ${to} from ${who} — not one of ours.`);
+            return;
+        }
+        log('OK', `${who} invited me to ${to} — going.`);
+        send(`JOIN ${to}`);
+        send(`NAMES ${to}`);
+        return;
+    }
+    // Ops given or taken away. Without this the bot never learns it has been
+    // opped after joining, so moderation stays silently inert in exactly the
+    // room somebody just made it a moderator of.
+    if (p[1] === 'MODE' && String(params[0] || '').startsWith('#')) {
+        const chan = String(params[0]).toLowerCase();
+        const spec = params[1] || '';
+        const targets = params.slice(2);
+        let adding = true;
+        let ti = 0;
+        for (const ch of spec) {
+            if (ch === '+') { adding = true; continue; }
+            if (ch === '-') { adding = false; continue; }
+            if ('ovhqab'.includes(ch)) {
+                const t = targets[ti++] || '';
+                if (ch === 'o' && t.toLowerCase() === me.toLowerCase()) {
+                    if (adding) { opped.add(chan); log('OK', `opped in ${params[0]}`); }
+                    else { opped.delete(chan); log('WARN', `de-opped in ${params[0]}`); }
+                }
+            }
+        }
+        return;
+    }
+    // Anything said in a room we are sitting in.
+    if (p[1] === 'PRIVMSG' && String(params[0] || '').startsWith('#')) {
+        moderate(params[0], who, line.slice(line.indexOf(' :') + 2));
         return;
     }
     // An order, sent privately to the bot.
@@ -300,10 +411,22 @@ function startUp() {
     // Learn the controllers' accounts up front, so the first order does not
     // have to be refused while we go and ask.
     for (const cn of CONTROLLERS) send(`WHOIS ${cn}`);
-    log('INFO', process.stdin.isTTY
-        ? 'type  start  to begin,  help  for the rest'
-        : `idle in ${LANDING_ROOM}. DM me "start" — only ${[...CONTROLLERS].join(', ')} `
-          + 'is listened to, and only while identified to services.');
+    // The host hands this job over roughly every six hours. Without AUTO_START
+    // that handover silently turns the bot off — it comes back, sits in the
+    // landing room, and waits for a DM that nobody knows is needed, which
+    // looks exactly like a bot that is running fine.
+    if (/^(1|true|yes|on)$/i.test(process.env.AUTO_START || '')) {
+        armed = true;
+        recruiter.start(log);
+        log('OK', `AUTO_START is on — recruiting straight away, ${recruiter.target}, `
+            + `from ${recruiter.channels.join(', ')} into ${room}.`);
+    } else {
+        log('INFO', process.stdin.isTTY
+            ? 'type  start  to begin,  help  for the rest'
+            : `idle in ${LANDING_ROOM}. DM me "start" — only ${[...CONTROLLERS].join(', ')} `
+              + 'listened to, and only while identified to services. This run ends in '
+              + '~6 hours and the next one comes up idle again unless AUTO_START is set.');
+    }
     // The member lists go stale as people come and go; refresh them the way
     // the live bot does rather than trusting one NAMES from startup.
     setInterval(() => {
@@ -320,9 +443,13 @@ function startUp() {
 // already asked, so everybody gets invited a second time.
 function command(line, reply) {
     const out = reply || ((m) => log('INFO', m));
-    const [cmd, ...rest] = String(line).trim().split(/\s+/);
+    const [rawCmd, ...rest] = String(line).trim().split(/\s+/);
+    // "!help" and "help" are the same thing. People type the prefix out of
+    // habit from every other bot in the room, and answering nothing to a
+    // one-character difference makes the bot look dead.
+    const cmd = String(rawCmd || '').replace(/^[!.$]+/, '');
     const arg = rest.join(' ').trim();
-    switch ((cmd || '').toLowerCase()) {
+    switch (cmd.toLowerCase()) {
         case '':
             return;
         case 'nick': {
@@ -383,10 +510,59 @@ function command(line, reply) {
             out('leaving.');
             stop('told to stop');
             return;
+        case 'into': {
+            if (!arg.startsWith('#')) { out(`inviting into ${room}. Use: into #room`); return; }
+            room = arg.split(/\s+/)[0];
+            out(`invitations now point at ${room}. I need ops there if it is +i — `
+                + 'invite me and op me, then say start.');
+            log('OK', `target room changed to ${room}`);
+            return;
+        }
+        case 'from': {
+            if (!arg.includes('#')) {
+                out(`finding people in ${recruiter.channels.join(', ') || '(nowhere)'}. `
+                    + 'Use: from #room,#room');
+                return;
+            }
+            const list = arg.split(/[,\s]+/).filter((x) => x.startsWith('#'));
+            recruiter.channels = list;
+            for (const ch of list) { send(`JOIN ${ch}`); send(`NAMES ${ch}`); }
+            out(`now looking for people in ${list.join(', ')}.`);
+            log('OK', `source rooms changed to ${list.join(', ')}`);
+            return;
+        }
+        case 'mod': {
+            if (/^(on|off)$/i.test(arg)) {
+                modOn = /^on$/i.test(arg);
+                const where = [...opped];
+                out(modOn
+                    ? `moderation ON. I hold ops in ${where.length ? where.join(', ') : 'NO room yet'} `
+                      + '— I can only act where I am an operator.'
+                    : 'moderation OFF. Still here, watching nothing.');
+                log('OK', `moderation ${modOn ? 'on' : 'off'} (opped in: ${where.join(', ') || 'nowhere'})`);
+                return;
+            }
+            out(`moderation is ${modOn ? 'ON' : 'OFF'}. Use: mod on | mod off. `
+                + `Opped in: ${[...opped].join(', ') || 'nowhere yet'}.`);
+            return;
+        }
         case 'help':
         default:
-            out('commands: start | pause | nick <name> | target feminine|other|all '
-                + '| status | who | quit');
+            // Sent as several lines. IRC silently truncates past ~512 bytes,
+            // and a help text that loses its own last third is worse than a
+            // short one — the commands you cannot see are the ones you needed.
+            out('start | pause — begin or stop inviting (it comes up idle)');
+            out('mod on | mod off — moderate rooms where I hold ops. Warn, then kick, '
+                + 'then ban. Severe abuse only, never you.');
+            out('into #room — where invitations point. Invite me there and op me first.');
+            out('from #room,#room — where I look for people');
+            out('target feminine | other | all — who gets invited');
+            out('nick <name> — rename me without losing who I have already asked');
+            out('status — who I am, where I invite from and to, how many asked');
+            out('who — how many people I can see in each source room');
+            out('quit — end this run. It comes back on the next handover.');
+            out(`I only listen to ${[...CONTROLLERS].join(' and ')}, and only while `
+                + 'you are identified to NickServ.');
     }
 }
 

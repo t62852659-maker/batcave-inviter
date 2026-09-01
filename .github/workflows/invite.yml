@@ -1,12 +1,23 @@
 name: Inviter
 
-# Started BY HAND, with the name and the room typed in.
+# It just sits there, the way Dracula does.
 #
-# There is deliberately no push trigger. Every push to the bot repos today
-# restarted a live fleet, and four of those in a few minutes earned a Z-line on
-# the whole address range. An inviter is something you start when you want it,
-# not something that redeploys because a comment changed.
+# Every ten minutes: if the previous run has ended, start a fresh one. With
+# cancel-in-progress:false the cron does NOT kill a running bot — the new run
+# waits and takes over when the current one hits its 350-minute timeout. That
+# is continuous presence with one short handover roughly every six hours,
+# rather than a restart every ten minutes.
+#
+# Ten, not five. Dracula's five-minute cron is fine for ONE bot; this is
+# another connection from the same GitHub address range that already earned a
+# Z-line today ("connect too many times in too short a duration"), and a
+# handover that arrives twice as often is twice the connection traffic for no
+# extra coverage.
+#
+# Still no PUSH trigger. Editing a comment must never reconnect a live bot.
 on:
+  schedule:
+    - cron: '*/10 * * * *'
   workflow_dispatch:
     inputs:
       nick:
@@ -60,17 +71,35 @@ jobs:
           NICKSERV_PASS: ${{ secrets.NICKSERV_PASS }}
           IRC_SERVER: ${{ secrets.IRC_SERVER || 'irc.hybridirc.com' }}
           IRC_PORT: ${{ secrets.IRC_PORT || '6697' }}
-          RECRUIT_TARGET: ${{ inputs.target }}
+          # inputs -> secrets -> literal.
+          #
+          # A SCHEDULED run has no inputs at all — they are only populated when
+          # somebody presses Run workflow — so without the middle link every
+          # cron restart would come up with empty settings and sit in nothing,
+          # inviting nobody, looking alive. Set the secrets and the bot keeps
+          # its configuration across every handover on its own.
+          INV_NICK: ${{ inputs.nick || secrets.INVITER_NICK || 'hmmm' }}
+          INV_ROOM: ${{ inputs.room || secrets.INVITER_ROOM || '#adultmasti' }}
+          INV_SOURCES: ${{ inputs.sources || secrets.INVITER_SOURCES || '#desiadda,#chatsansar' }}
+          RECRUIT_TARGET: ${{ inputs.target || secrets.RECRUIT_TARGET || 'feminine' }}
           RECRUIT_PER_ROUND: ${{ secrets.RECRUIT_PER_ROUND || '3' }}
           RECRUIT_MIN_GAP_MIN: ${{ secrets.RECRUIT_MIN_GAP_MIN || '1' }}
           RECRUIT_MAX_GAP_MIN: ${{ secrets.RECRUIT_MAX_GAP_MIN || '2' }}
           RECRUIT_REASK_DAYS: ${{ secrets.RECRUIT_REASK_DAYS || '21' }}
           FEMININE_HINTS: ${{ secrets.FEMININE_HINTS }}
           DRY_RUN: ${{ inputs.dry_run }}
-          LANDING_ROOM: ${{ inputs.landing }}
-          # Only this nick may command the bot, and only while identified to
-          # services — the nick alone is a claim anybody can make.
-          CONTROLLERS: ${{ secrets.CONTROLLERS || 'Vampire' }}
+          LANDING_ROOM: ${{ inputs.landing || secrets.INVITER_LANDING || '#desiadda' }}
+          # Who may command it, and ONLY while identified to services — the
+          # nick by itself is a claim anybody on the network can make.
+          CONTROLLERS: ${{ secrets.CONTROLLERS || 'Vampire,Vikram' }}
+          # Off by default: it comes up idle and waits to be told. Set this to
+          # "on" if you would rather it resume inviting by itself after each
+          # six-hourly handover instead of being DMed again each time.
+          AUTO_START: ${{ secrets.AUTO_START }}
+        # Through the ENVIRONMENT, never interpolated into the command line.
+        # "${{ inputs.nick }}" pasted straight into a shell is a command
+        # injection: anybody who can press Run workflow can type a nick that
+        # runs whatever they like on the runner, with the secrets loaded.
         run: |
           node test.js
-          node invite.js "${{ inputs.nick }}" "${{ inputs.room }}" "${{ inputs.sources }}"
+          node invite.js "$INV_NICK" "$INV_ROOM" "$INV_SOURCES"
