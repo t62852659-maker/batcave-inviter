@@ -1,0 +1,63 @@
+name: Inviter
+
+# Started BY HAND, with the name and the room typed in.
+#
+# There is deliberately no push trigger. Every push to the bot repos today
+# restarted a live fleet, and four of those in a few minutes earned a Z-line on
+# the whole address range. An inviter is something you start when you want it,
+# not something that redeploys because a comment changed.
+on:
+  workflow_dispatch:
+    inputs:
+      nick:
+        description: 'What the bot is called on IRC'
+        required: true
+        default: 'Doorman'
+      room:
+        description: 'The room it invites people INTO (you need ops there if it is +i)'
+        required: true
+        default: '#adultmasti'
+      sources:
+        description: 'Rooms to find people IN, comma separated'
+        required: true
+        default: '#desiadda,#chatsansar'
+      target:
+        description: 'Who to invite'
+        required: true
+        default: 'feminine'
+        type: choice
+        options: [feminine, other, all]
+      minutes:
+        description: 'How long to run for (max 350)'
+        required: true
+        default: '350'
+
+# One inviter at a time. A second run waits rather than putting two bots with
+# the same nick on the network, which is a collision and a rename loop.
+concurrency:
+  group: inviter
+  cancel-in-progress: false
+
+jobs:
+  invite:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(inputs.minutes) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Invite
+        env:
+          NICKSERV_PASS: ${{ secrets.NICKSERV_PASS }}
+          IRC_SERVER: ${{ secrets.IRC_SERVER || 'irc.hybridirc.com' }}
+          IRC_PORT: ${{ secrets.IRC_PORT || '6697' }}
+          RECRUIT_TARGET: ${{ inputs.target }}
+          RECRUIT_PER_ROUND: ${{ secrets.RECRUIT_PER_ROUND || '3' }}
+          RECRUIT_MIN_GAP_MIN: ${{ secrets.RECRUIT_MIN_GAP_MIN || '1' }}
+          RECRUIT_MAX_GAP_MIN: ${{ secrets.RECRUIT_MAX_GAP_MIN || '2' }}
+          RECRUIT_REASK_DAYS: ${{ secrets.RECRUIT_REASK_DAYS || '21' }}
+          FEMININE_HINTS: ${{ secrets.FEMININE_HINTS }}
+        run: |
+          node test.js
+          node invite.js "${{ inputs.nick }}" "${{ inputs.room }}" "${{ inputs.sources }}"
