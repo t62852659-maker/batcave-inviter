@@ -103,6 +103,9 @@ let sock = null;
 let me = nick;
 let pendingNick = '';
 let nickTries = 0;
+let attempts = 0;              // connections tried this run
+let registered = false;        // did we ever get past the server's greeting
+let lastError = '';            // the socket's own words, if it had any
 // nick(lower) -> services account. A controller's nick alone is not proof:
 // these are unregistered-friendly rooms and anybody can wear a name.
 const accountOf = new Map();
@@ -161,8 +164,32 @@ function connect() {
             try { handle(strip(l)); } catch (e) { log('ERR', `on "${l.slice(0, 90)}": ${e.message}`); }
         }
     });
-    sock.on('error', (e) => { log('ERR', `socket: ${e.message}`); stop('connection error', 1); });
-    sock.on('close', () => stop('disconnected', 1));
+    sock.on('error', (e) => { lastError = e.message; log('ERR', `socket: ${e.message}`); });
+    // Reconnect, rather than treating one dropped connection as the end.
+    //
+    // This gave up on the FIRST close and exited, which is wrong for something
+    // meant to sit in a room for six hours: any blip ended the run. It also
+    // hid the reason — the bot connected, was dropped 0.3s later, said
+    // "disconnected" and quit, and there was no second attempt to find out why.
+    //
+    // Backoff, not a tight loop. A server that just dropped us is the last
+    // thing to hammer: reconnecting fast is how this project earned a Z-line
+    // on the whole address range today.
+    sock.on('close', () => {
+        if (stopped) return;
+        attempts += 1;
+        if (registered) {
+            log('WARN', `disconnected after being connected (attempt ${attempts}).`);
+        } else {
+            log('WARN', `dropped before registering${lastError ? ` — ${lastError}` : ''} `
+                + `(attempt ${attempts}). The server refused us without saying why, `
+                + 'which usually means the address is throttled or banned.');
+        }
+        if (attempts >= 6) { stop('six failed connections — giving up this run', 1); return; }
+        const wait = Math.min(30000 * attempts, 180000);
+        log('INFO', `reconnecting in ${Math.round(wait / 1000)}s…`);
+        setTimeout(() => { if (!stopped) connect(); }, wait);
+    });
 }
 
 function track(chan, raw) {
@@ -255,6 +282,8 @@ function handle(line) {
         return;
     }
     if (num === '376' || num === '422') {
+        registered = true;
+        attempts = 0;                              // a good connection clears the count
         if (process.env.NICKSERV_PASS) send(`PRIVMSG NickServ :IDENTIFY ${process.env.NICKSERV_PASS}`);
         setTimeout(startUp, 3000);
         return;
