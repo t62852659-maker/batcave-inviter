@@ -70,7 +70,9 @@ const PORT = Number(process.env.IRC_PORT || 6697);
 const USE_TLS = !/^(0|off|false|no)$/i.test(process.env.IRC_TLS || 'on');
 
 // Where it lands and sits, quietly, until it is told to work.
-const LANDING_ROOM = (process.env.LANDING_ROOM || '#desiadda').trim();
+// let, not const: "land #room" moves it, so the rooms are decided on IRC
+// rather than by editing a file and restarting.
+let LANDING_ROOM = (process.env.LANDING_ROOM || '#desiadda').trim();
 // Who may tell it. Orders arrive as a private message TO the bot, never in a
 // channel: a command typed in a room is read by the room, and "start inviting
 // from here" is not a thing to announce to the people about to be invited.
@@ -113,7 +115,26 @@ let stopped = false;
 const members = new Map();     // chan(lower) -> Map(nickLower -> {nick, prefix})
 
 function send(line) { try { sock.write(line + '\r\n'); } catch (e) { /* closing */ } }
-function say(chan, text) { send(`PRIVMSG ${chan} :${text}`); }
+/**
+ * Refuses to speak in a channel. Deliberately.
+ *
+ * The owner's rule: "it is quiet it remains quiet". This bot's whole value is
+ * that a room does not know it is there — it invites people and moderates when
+ * asked, and announces nothing about itself. The recruiter it borrows from
+ * Dracula has an announce() that posts "The BatCave stirs at…" into the home
+ * channel on a timer; this is where that dies, so no future change to the
+ * shared recruiter can make this one start talking.
+ *
+ * Private messages to a PERSON still work — that is how it answers you, and
+ * how it tells somebody why they were warned. Only rooms are silent.
+ */
+function say(chan, text) {
+    if (String(chan).startsWith('#') || String(chan).startsWith('&')) {
+        log('QUIET', `refused to say in ${chan}: ${String(text).slice(0, 60)}`);
+        return;
+    }
+    send(`PRIVMSG ${chan} :${text}`);
+}
 
 function isFatal(line) {
     return /z-?line|k-?line|g-?line|too many times in too short|^ERROR/i.test(line);
@@ -357,15 +378,24 @@ function handle(line) {
         // only thing between this bot and anybody on the network is a name
         // anybody on the network can put on — which is the very attack the
         // main room is defended against.
+        // Being named in the config is enough — the owner's call, and the
+        // practical one: a controller who is not registered with NickServ
+        // could not command their own bot at all, which is how somebody ends
+        // up locked out of it in the middle of a raid.
+        //
+        // The trade is real and worth stating: a nick is not proof, so anybody
+        // who takes a controller's name while they are offline can command
+        // this bot. Set REQUIRE_IDENTIFIED=on to demand a services account
+        // instead, which is the safer setting for a room under attack.
         const acct = (accountOf.get(from) || '').toLowerCase();
-        if (!acct) {
+        if (!acct && /^(1|true|yes|on)$/i.test(process.env.REQUIRE_IDENTIFIED || '')) {
             answer('You are not identified to services, so I cannot tell you from '
                 + 'somebody wearing your name. /msg NickServ IDENTIFY, then try again.');
-            log('WARN', `refused ${who}: the nick matches a controller but has no account.`);
-            send(`WHOIS ${who}`);                            // in case we simply had not asked yet
+            log('WARN', `refused ${who}: REQUIRE_IDENTIFIED is on and they have no account.`);
+            send(`WHOIS ${who}`);
             return;
         }
-        log('CMD', `${who} (${acct}): ${text}`);
+        log('CMD', `${who}${acct ? ` (${acct})` : ' (unverified)'}: ${text}`);
         command(text, answer);
         return;
     }
@@ -554,12 +584,61 @@ function command(line, reply) {
                 return;
             }
             const list = arg.split(/[,\s]+/).filter((x) => x.startsWith('#'));
+            // LEAVE the ones we are dropping. Only joining the new list left
+            // the bot sitting in every room it had ever been pointed at,
+            // watching rooms nobody asked it to watch and holding connections
+            // to them for the rest of the run.
+            const keep = new Set([...list, room, LANDING_ROOM].map((c) => c.toLowerCase()));
+            for (const old of recruiter.channels) {
+                if (!keep.has(old.toLowerCase())) send(`PART ${old} :moving on`);
+            }
             recruiter.channels = list;
             for (const ch of list) { send(`JOIN ${ch}`); send(`NAMES ${ch}`); }
             out(`now looking for people in ${list.join(', ')}.`);
             log('OK', `source rooms changed to ${list.join(', ')}`);
             return;
         }
+        case 'land': {
+            if (!arg.startsWith('#')) {
+                out(`sitting in ${LANDING_ROOM || '(nowhere)'}. Use: land #room`);
+                return;
+            }
+            const dest = arg.split(/\s+/)[0];
+            const old = LANDING_ROOM;
+            LANDING_ROOM = dest;
+            send(`JOIN ${dest}`);
+            send(`NAMES ${dest}`);
+            // Do not leave a room that is still doing a job.
+            const stillNeeded = [room, ...recruiter.channels].map((c) => c.toLowerCase());
+            if (old && old.toLowerCase() !== dest.toLowerCase()
+                && !stillNeeded.includes(old.toLowerCase())) {
+                send(`PART ${old} :moving on`);
+            }
+            out(`now sitting in ${dest}.`);
+            log('OK', `landing room changed to ${dest}`);
+            return;
+        }
+        case 'join': {
+            if (!arg.startsWith('#')) { out('Use: join #room'); return; }
+            const ch = arg.split(/\s+/)[0];
+            send(`JOIN ${ch}`);
+            send(`NAMES ${ch}`);
+            out(`joining ${ch}. It is not a source room unless you say `
+                + `"from" — this is just sitting there.`);
+            return;
+        }
+        case 'leave':
+        case 'part': {
+            if (!arg.startsWith('#')) { out('Use: leave #room'); return; }
+            const ch = arg.split(/\s+/)[0];
+            send(`PART ${ch} :told to`);
+            out(`left ${ch}.`);
+            return;
+        }
+        case 'rooms':
+            out(`invites into ${room} | finds people in `
+                + `${recruiter.channels.join(', ') || '(nowhere)'} | sits in ${LANDING_ROOM}`);
+            return;
         case 'mod': {
             if (/^(on|off)$/i.test(arg)) {
                 modOn = /^on$/i.test(arg);
@@ -583,8 +662,11 @@ function command(line, reply) {
             out('start | pause — begin or stop inviting (it comes up idle)');
             out('mod on | mod off — moderate rooms where I hold ops. Warn, then kick, '
                 + 'then ban. Severe abuse only, never you.');
+            out('rooms — where I invite into, look in, and sit');
             out('into #room — where invitations point. Invite me there and op me first.');
-            out('from #room,#room — where I look for people');
+            out('from #room,#room — where I look for people (I leave the old ones)');
+            out('land #room — where I sit and wait');
+            out('join #room / leave #room — sit in a room without recruiting from it');
             out('target feminine | other | all — who gets invited');
             out('nick <name> — rename me without losing who I have already asked');
             out('status — who I am, where I invite from and to, how many asked');
