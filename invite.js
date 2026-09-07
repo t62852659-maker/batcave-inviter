@@ -45,8 +45,8 @@ if (!nick || !room || !room.startsWith('#')) {
     [sources]  rooms to find people IN, comma separated
 
   Examples:
-    node invite.js Doorman "#myroom" "#lobby,#chat"
-    RECRUIT_TARGET=all node invite.js Doorman "#myroom" "#lobby"
+    node invite.js Doorman "#room1" "#room2,#room3"
+    RECRUIT_TARGET=all node invite.js Doorman "#room1" "#room2"
 
   It uses the live bot's own recruiter (recruit.js), so the choice of who to
   invite is identical: the same name lists, the same self-label reading, the
@@ -72,7 +72,7 @@ const USE_TLS = !/^(0|off|false|no)$/i.test(process.env.IRC_TLS || 'on');
 // Where it lands and sits, quietly, until it is told to work.
 // let, not const: "land #room" moves it, so the rooms are decided on IRC
 // rather than by editing a file and restarting.
-let LANDING_ROOM = (process.env.LANDING_ROOM || '#desiadda').trim();
+let LANDING_ROOM = (process.env.LANDING_ROOM || '#room1').trim();
 // Who may tell it. Orders arrive as a private message TO the bot, never in a
 // channel: a command typed in a room is read by the room, and "start inviting
 // from here" is not a thing to announce to the people about to be invited.
@@ -672,8 +672,7 @@ function command(line, reply) {
             out('status — who I am, where I invite from and to, how many asked');
             out('who — how many people I can see in each source room');
             out('quit — end this run. It comes back on the next handover.');
-            out(`I only listen to ${[...CONTROLLERS].join(' and ')}, and only while `
-                + 'you are identified to NickServ.');
+
     }
 }
 

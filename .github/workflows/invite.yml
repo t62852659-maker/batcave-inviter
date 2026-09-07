@@ -27,11 +27,11 @@ on:
       room:
         description: 'The room it invites people INTO (you need ops there if it is +i)'
         required: true
-        default: '#adultmasti'
+        default: '#room1'
       sources:
         description: 'Rooms to find people IN, comma separated'
         required: true
-        default: '#desiadda,#chatsansar'
+        default: '#room2,#room3'
       target:
         description: 'Who to invite'
         required: true
@@ -41,7 +41,7 @@ on:
       landing:
         description: 'The room it sits in, idle, waiting to be told to start'
         required: true
-        default: '#desiadda'
+        default: '#room1'
       dry_run:
         description: 'Check it starts and connects, then stop without inviting anyone'
         required: false
@@ -79,8 +79,8 @@ jobs:
           # inviting nobody, looking alive. Set the secrets and the bot keeps
           # its configuration across every handover on its own.
           INV_NICK: ${{ inputs.nick || secrets.INVITER_NICK || 'hmmm' }}
-          INV_ROOM: ${{ inputs.room || secrets.INVITER_ROOM || '#adultmasti' }}
-          INV_SOURCES: ${{ inputs.sources || secrets.INVITER_SOURCES || '#desiadda,#chatsansar' }}
+          INV_ROOM: ${{ inputs.room || secrets.INVITER_ROOM || '#room1' }}
+          INV_SOURCES: ${{ inputs.sources || secrets.INVITER_SOURCES || '#room2,#room3' }}
           RECRUIT_TARGET: ${{ inputs.target || secrets.RECRUIT_TARGET || 'feminine' }}
           RECRUIT_PER_ROUND: ${{ secrets.RECRUIT_PER_ROUND || '3' }}
           RECRUIT_MIN_GAP_MIN: ${{ secrets.RECRUIT_MIN_GAP_MIN || '1' }}
@@ -88,7 +88,7 @@ jobs:
           RECRUIT_REASK_DAYS: ${{ secrets.RECRUIT_REASK_DAYS || '21' }}
           FEMININE_HINTS: ${{ secrets.FEMININE_HINTS }}
           DRY_RUN: ${{ inputs.dry_run }}
-          LANDING_ROOM: ${{ inputs.landing || secrets.INVITER_LANDING || '#desiadda' }}
+          LANDING_ROOM: ${{ inputs.landing || secrets.INVITER_LANDING || '#room1' }}
           # Who may command it, and ONLY while identified to services — the
           # nick by itself is a claim anybody on the network can make.
           CONTROLLERS: ${{ secrets.CONTROLLERS || 'Vampire,Vikram' }}
