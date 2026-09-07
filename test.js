@@ -148,7 +148,11 @@ run({}, (r) => {
 
     console.log('\n— only the owner can switch it on —');
     c('it idles until told, and says so',
-      /idle in #desiadda/.test(r.out) && /DM me "start"/.test(r.out),
+      // Not a hardcoded channel. The landing default moved to a neutral
+      // #room1 and this pinned the old one, so the assertion failed for a
+      // reason that had nothing to do with the property being tested: that it
+      // idles, and says where.
+      /idle in #\S+/.test(r.out) && /DM me "start"/.test(r.out),
       'a bot that starts working when a runner starts is a bot that works when nobody meant it to');
     c('a DM from a stranger is ignored', /ignored a DM from nobody/.test(r.out),
       r.out.split('\n').filter((l) => /nobody/i.test(l)).join(' | ') || '(no sign it was even seen)');
