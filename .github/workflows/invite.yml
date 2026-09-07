@@ -96,6 +96,10 @@ jobs:
           # "on" if you would rather it resume inviting by itself after each
           # six-hourly handover instead of being DMed again each time.
           AUTO_START: ${{ secrets.AUTO_START }}
+          # Set the OPEN_CONTROL secret to "on" and ANYBODY on the network can
+          # command the bot — repoint it, switch moderation off, shut it down.
+          # Off unless you mean it.
+          OPEN_CONTROL: ${{ secrets.OPEN_CONTROL }}
         # Through the ENVIRONMENT, never interpolated into the command line.
         # "${{ inputs.nick }}" pasted straight into a shell is a command
         # injection: anybody who can press Run workflow can type a nick that

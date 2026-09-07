@@ -154,10 +154,14 @@ run({}, (r) => {
       // idles, and says where.
       /idle in #\S+/.test(r.out) && /DM me "start"/.test(r.out),
       'a bot that starts working when a runner starts is a bot that works when nobody meant it to');
-    c('a DM from a stranger is ignored', /ignored a DM from nobody/.test(r.out),
+    // REFUSED and told, not ignored. Silence was the bug the owner hit: he
+    // messaged the bot, got nothing back, and reasonably concluded it was
+    // broken. A stranger's command still does not run — they are just told so.
+    c('a command from a stranger is refused, out loud',
+      /refused a command from nobody/.test(r.out),
       r.out.split('\n').filter((l) => /nobody/i.test(l)).join(' | ') || '(no sign it was even seen)');
     c('and so is one from somebody WEARING the owner\'s privileges',
-      /ignored a DM from Impostor/.test(r.out),
+      /refused a command from Impostor/.test(r.out),
       'the nick is a claim; only the account is proof');
     c('the identified owner arms it', /armed — recruiting now/.test(r.out),
       r.out.split('\n').filter((l) => /armed|CMD/.test(l)).join(' | ') || '(never started)');
