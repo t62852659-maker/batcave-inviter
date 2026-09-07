@@ -72,7 +72,7 @@ const USE_TLS = !/^(0|off|false|no)$/i.test(process.env.IRC_TLS || 'on');
 // Where it lands and sits, quietly, until it is told to work.
 // let, not const: "land #room" moves it, so the rooms are decided on IRC
 // rather than by editing a file and restarting.
-let LANDING_ROOM = (process.env.LANDING_ROOM || '#room1').trim();
+let LANDING_ROOM = (process.env.LANDING_ROOM || '#room').trim();
 // Who may tell it. Orders arrive as a private message TO the bot, never in a
 // channel: a command typed in a room is read by the room, and "start inviting
 // from here" is not a thing to announce to the people about to be invited.
@@ -86,6 +86,14 @@ let armed = false;
 // Anybody at all may command it. OFF by default: with this on, any person on
 // the network can repoint the bot, switch its moderation off, or shut it down.
 const OPEN_CONTROL = /^(1|true|yes|on)$/i.test(process.env.OPEN_CONTROL || '');
+// Nobody is answered until they say "!hi active".
+//
+// The old rule was a list of two nicks, and it locked the owner out of his own
+// bot the moment he was wearing a third — which is most of the time. A phrase
+// he can say from ANY nick fixes that, while still leaving the bot silent to
+// the rest of the network: a stranger gets nothing back, not a refusal that
+// explains what to type next.
+const active = new Set();
 // Moderation is OFF until switched on, and only ever acts where the bot
 // actually holds ops. A bot that tries to moderate a room it has no power in
 // produces a stream of "you're not channel operator" and nothing else, which
@@ -94,9 +102,9 @@ let modOn = false;
 const opped = new Set();               // chanKey -> we hold @ here
 const offences = new Map();            // nick(lower) -> how many times
 
-// The recruiter reads its source rooms from the environment, so the CLI
-// argument is simply written there before it is constructed.
-if (sources.length) process.env.RECRUIT_CHANNELS = sources.join(',');
+// The three busy rooms it watches unless it is told otherwise.
+const DEFAULT_SOURCES = '#chatsansar,#desiadda,#allindiachat.com';
+process.env.RECRUIT_CHANNELS = sources.length ? sources.join(',') : DEFAULT_SOURCES;
 process.env.RECRUIT_ON = process.env.RECRUIT_ON || 'on';
 
 const log = (lvl, m) => console.log(`[${lvl}] ${m}`);
@@ -381,51 +389,30 @@ function handle(line) {
     }
     // An order, sent privately to the bot.
     if (p[1] === 'PRIVMSG' && String(params[0] || '').toLowerCase() === me.toLowerCase()) {
-        const text = line.slice(line.indexOf(' :') + 2);
+        const text = line.slice(line.indexOf(' :') + 2).trim();
         const from = who.toLowerCase();
         const answer = (m) => send(`PRIVMSG ${who} :${m}`);
-        // help is for ANYBODY. It is the one thing a bot should always
-        // answer: a bot that ignores "help" is indistinguishable from a bot
-        // that is broken, and that is exactly how this looked — the owner
-        // typed help, got silence, and reasonably concluded it was not
-        // working. Nothing here is secret; the commands only DO anything for
-        // a controller.
-        if (/^[!.$]*help\b/i.test(text.trim())) {
-            command('help', answer);
+
+        // The one thing that wakes it up.
+        if (/^!?hi\s+active$/i.test(text)) {
+            active.add(from);
+            answer('Active. !help for commands.');
+            log('CMD', `${who} is active.`);
             return;
         }
-        if (!CONTROLLERS.has(from) && !OPEN_CONTROL) {
-            // Say so, rather than going quiet. Silence taught the owner
-            // nothing and cost an evening of wondering whether the bot was
-            // alive.
-            answer('I only take orders from the names set in my configuration. '
-                + 'Say "help" to see what I can do.');
-            log('WARN', `refused a command from ${who} — not a controller.`);
+        // Silence for everybody else. Not a refusal explaining what to type —
+        // the point of the phrase is that the bot is invisible until somebody
+        // already knows it.
+        if (!active.has(from) && !OPEN_CONTROL) {
+            log('INFO', `ignored a DM from ${who} — not active.`);
             return;
         }
-        // The nick is the claim; the ACCOUNT is the proof. Without this the
-        // only thing between this bot and anybody on the network is a name
-        // anybody on the network can put on — which is the very attack the
-        // main room is defended against.
-        // Being named in the config is enough — the owner's call, and the
-        // practical one: a controller who is not registered with NickServ
-        // could not command their own bot at all, which is how somebody ends
-        // up locked out of it in the middle of a raid.
-        //
-        // The trade is real and worth stating: a nick is not proof, so anybody
-        // who takes a controller's name while they are offline can command
-        // this bot. Set REQUIRE_IDENTIFIED=on to demand a services account
-        // instead, which is the safer setting for a room under attack.
-        const acct = (accountOf.get(from) || '').toLowerCase();
-        if (!acct && /^(1|true|yes|on)$/i.test(process.env.REQUIRE_IDENTIFIED || '')) {
-            answer('You are not identified to services, so I cannot tell you from '
-                + 'somebody wearing your name. /msg NickServ IDENTIFY, then try again.');
-            log('WARN', `refused ${who}: REQUIRE_IDENTIFIED is on and they have no account.`);
-            send(`WHOIS ${who}`);
-            return;
-        }
-        log('CMD', `${who}${acct ? ` (${acct})` : ' (unverified)'}: ${text}`);
-        command(text, answer);
+        // Everything else must carry the "!". Without it an ordinary sentence
+        // to the bot gets read as a command, and "stop" said in passing is a
+        // shut down nobody meant.
+        if (!text.startsWith('!')) return;
+        log('CMD', `${who}: ${text}`);
+        command(text.slice(1), answer);
         return;
     }
     if (num === '354' || num === '352') {                    // WHO reply: accounts
@@ -509,11 +496,11 @@ function startUp() {
         log('OK', `AUTO_START is on — recruiting straight away, ${recruiter.target}, `
             + `from ${recruiter.channels.join(', ')} into ${room}.`);
     } else {
-        log('INFO', process.stdin.isTTY
-            ? 'type  start  to begin,  help  for the rest'
-            : `idle in ${LANDING_ROOM}. DM me "start" — only ${[...CONTROLLERS].join(', ')} `
-              + 'listened to, and only while identified to services. This run ends in '
-              + '~6 hours and the next one comes up idle again unless AUTO_START is set.');
+        // Says what is actually true now. This still described the old gate —
+        // two named nicks and a services account — long after "!hi active"
+        // replaced it, which is the kind of stale instruction that has people
+        // typing the wrong thing at a bot that is working fine.
+        log('INFO', `idle in ${LANDING_ROOM}. DM me "!hi active", then "!help".`);
     }
     // The member lists go stale as people come and go; refresh them the way
     // the live bot does rather than trusting one NAMES from startup.
@@ -552,11 +539,9 @@ function command(line, reply) {
             return;
         }
         case 'status':
-            out(`${me} | into ${room} | from ${recruiter.channels.join(', ')} `
-                + `| target=${recruiter.target} | asked ${recruiter.invited.size} so far`);
-            if (recruiter.recent && recruiter.recent.length) {
-                out(`recent: ${recruiter.recent.slice(-5).join(', ')}`);
-            }
+            // Two lines. Anything longer is scrolled past.
+            out(`${me} ${armed ? 'running' : 'idle'} · ${recruiter.channels.join(' ')} → ${room}`);
+            out(`${recruiter.invited.size} asked · ${perRound} per round · ${recruiter.target}`);
             return;
         case 'who':
             for (const c of recruiter.channels) {
@@ -668,6 +653,36 @@ function command(line, reply) {
             out(`invites into ${room} | finds people in `
                 + `${recruiter.channels.join(', ') || '(nowhere)'} | sits in ${LANDING_ROOM}`);
             return;
+        // !invite 20 from #room1 to #room2
+        //
+        // The whole job in one line. Everything it needs is in the sentence,
+        // so there is no order to remember and no state to get wrong — which
+        // is what "from" and "into" and "start" as three separate commands
+        // kept getting wrong.
+        case 'invite': {
+            const m = /^(\d+)\s+from\s+(\S+)\s+to\s+(\S+)$/i.exec(arg)
+                || /^(\d+)\s+(\S+)\s+(\S+)$/.exec(arg);
+            if (!m) { out('!invite 20 from #room1 to #room2'); return; }
+            const n = Math.max(1, Math.min(50, parseInt(m[1], 10)));
+            const src = m[2].startsWith('#') ? m[2] : `#${m[2]}`;
+            const dst = m[3].startsWith('#') ? m[3] : `#${m[3]}`;
+            room = dst;
+            recruiter.channels = [src];
+            send(`JOIN ${src}`); send(`NAMES ${src}`);
+            send(`JOIN ${dst}`); send(`NAMES ${dst}`);
+            armed = true;
+            out(`${src} → ${dst}, ${n} of them.`);
+            // Wait for NAMES. Inviting before the member list arrives asks an
+            // empty room and reports "nobody eligible", which reads as the bot
+            // refusing rather than as it not having looked yet.
+            setTimeout(() => {
+                const got = recruiter.inviteRound(n);
+                out(typeof got === 'number' && got >= 0
+                    ? `Sent ${got}.`
+                    : 'Sent.');
+            }, 4000);
+            return;
+        }
         case 'per':
         case 'rate': {
             const n = parseInt(arg, 10);
@@ -707,26 +722,9 @@ function command(line, reply) {
         }
         case 'help':
         default:
-            // Sent as several lines. IRC silently truncates past ~512 bytes,
-            // and a help text that loses its own last third is worse than a
-            // short one — the commands you cannot see are the ones you needed.
-            out('Send these to me in a private message, one at a time. '
-                + 'A "!" in front is fine.');
-            out('start — begin inviting | pause — stop inviting but stay here');
-            out('mod on | mod off — moderate rooms where I hold ops. Warn, then kick, '
-                + 'then ban. Severe abuse only, never you.');
-            out('into #room — the room I invite people INTO. Op me there first.');
-            out('from #room,#room — the rooms I find people IN');
-            out('rooms — show all three: into, from, and where I sit');
-            out('per <n> — how many invites per round | now [n] — invite n right away');
-            out('land #room — where I sit and wait');
-            out('join #room / leave #room — sit in a room without recruiting from it');
-            out('target feminine | other | all — who gets invited');
-            out('nick <name> — rename me without losing who I have already asked');
-            out('status — who I am, where I invite from and to, how many asked');
-            out('who — how many people I can see in each source room');
-            out('stop (or quit) — shut me down. I return only if the schedule is on.');
-
+            out('!invite 20 from #room1 to #room2  ·  !join #room  ·  !part #room');
+            out('also: !stop !pause !status !rooms !per <n> !target all !mod on !nick <name>');
+            return;
     }
 }
 

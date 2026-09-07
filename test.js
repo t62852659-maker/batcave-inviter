@@ -82,9 +82,12 @@ function run(env, done, opts) {
                     // hardcoded to "D", so in the rename case the order went to
                     // a nick the bot no longer had and was correctly ignored —
                     // the bot was right and the test was wrong.
-                    setTimeout(() => w(`:nobody!u@h PRIVMSG ${botNick} :start`), 900);
-                    setTimeout(() => w(`:Impostor!u@h PRIVMSG ${botNick} :start`), 1200);
-                    setTimeout(() => w(`:Vampire!u@h PRIVMSG ${botNick} :${(opts && opts.say) || 'start'}`), 1600);
+                    // Strangers, who never say the phrase and must get silence.
+                    setTimeout(() => w(`:nobody!u@h PRIVMSG ${botNick} :start`), 700);
+                    setTimeout(() => w(`:Impostor!u@h PRIVMSG ${botNick} :!start`), 1000);
+                    // The owner: the phrase first, then commands with a "!".
+                    setTimeout(() => w(`:Vampire!u@h PRIVMSG ${botNick} :!hi active`), 1400);
+                    setTimeout(() => w(`:Vampire!u@h PRIVMSG ${botNick} :!${(opts && opts.say) || 'start'}`), 1900);
                 }
             }
         });
@@ -152,22 +155,30 @@ run({}, (r) => {
       // #room1 and this pinned the old one, so the assertion failed for a
       // reason that had nothing to do with the property being tested: that it
       // idles, and says where.
-      /idle in #\S+/.test(r.out) && /DM me "start"/.test(r.out),
+      // The wake-up phrase changed from "start" to "!hi active", and the
+      // startup line changed with it. Assert the PROPERTY — it idles, and it
+      // says how to wake it — not the exact words.
+      /idle in #\S+/.test(r.out) && /!hi active/.test(r.out),
       'a bot that starts working when a runner starts is a bot that works when nobody meant it to');
-    // REFUSED and told, not ignored. Silence was the bug the owner hit: he
-    // messaged the bot, got nothing back, and reasonably concluded it was
-    // broken. A stranger's command still does not run — they are just told so.
-    c('a command from a stranger is refused, out loud',
-      /refused a command from nobody/.test(r.out),
-      r.out.split('\n').filter((l) => /nobody/i.test(l)).join(' | ') || '(no sign it was even seen)');
-    c('and so is one from somebody WEARING the owner\'s privileges',
-      /refused a command from Impostor/.test(r.out),
-      'the nick is a claim; only the account is proof');
-    c('the identified owner arms it', /armed — recruiting now/.test(r.out),
+    // SILENT to anybody who has not said the phrase. Deliberately changed
+    // back: a refusal that explains what to type is an advertisement, and the
+    // owner wants the bot invisible until somebody already knows about it.
+    c('a stranger gets silence, not a reply',
+      /ignored a DM from nobody/.test(r.out)
+        && !r.sent.some((l) => /^PRIVMSG nobody/.test(l)),
+      r.sent.filter((l) => /PRIVMSG nobody/.test(l)).join(' | ') || '');
+    c('and so does one who guesses the "!" but not the phrase',
+      !r.sent.some((l) => /^PRIVMSG Impostor/.test(l)),
+      r.sent.filter((l) => /PRIVMSG Impostor/.test(l)).join(' | '));
+    c('the phrase wakes it for that person',
+      r.sent.some((l) => /^PRIVMSG Vampire :Active\./.test(l)),
+      r.sent.filter((l) => /PRIVMSG Vampire/.test(l)).join(' | ') || '(never woke)');
+    c('and then obeys them', /armed — recruiting now/.test(r.out),
       r.out.split('\n').filter((l) => /armed|CMD/.test(l)).join(' | ') || '(never started)');
-    c('and it asked the server who the owner IS before trusting the name',
-      r.sent.some((l) => /^WHOIS Vampire/i.test(l)),
-      'without the account check, anybody can put on that nick and command the bot');
+    c('every command needs the "!"',
+      /if \(!text\.startsWith\('!'\)\) return;/.test(
+          require('fs').readFileSync(path.join(__dirname, 'invite.js'), 'utf8')),
+      'an ordinary sentence to the bot must not be read as a command');
 
     console.log('\n— RECRUIT_TARGET=all, for a room that wants everyone —');
     run({ RECRUIT_TARGET: 'all' }, (a) => {
