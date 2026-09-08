@@ -127,6 +127,11 @@ const members = new Map();     // chan(lower) -> Map(nickLower -> {nick, prefix}
 const refusedRooms = new Set(); // rooms that turned us away before we identified
 
 function send(line) { try { sock.write(line + '\r\n'); } catch (e) { /* closing */ } }
+// Trimmed at every use. `gh secret set` from a pipe keeps the trailing newline,
+// and IRC would send it as part of the password — refused with the same
+// "Invalid password" a genuinely wrong one gets.
+const nsPass = () => String(process.env.NICKSERV_PASS || '').trim();
+const nsAccount = () => String(process.env.NICKSERV_ACCOUNT || '').trim();
 /**
  * Refuses to speak in a channel. Deliberately.
  *
@@ -202,13 +207,13 @@ recruiter.inviteRound = (n) => roundAsBuilt(n === undefined ? perRound : n);
  * other order fails silently.
  */
 function reclaimNick() {
-    const pass = process.env.NICKSERV_PASS;
+    const pass = nsPass();
     if (!pass) {
         log('ERR', `renamed to ${me} and no NICKSERV_PASS is set, so I cannot take `
             + `"${nick}" back. Register the nick and set the secret.`);
         return;
     }
-    const acct = (process.env.NICKSERV_ACCOUNT || nick).trim();
+    const acct = nsAccount() || nick;
     send(`PRIVMSG NickServ :IDENTIFY ${acct} ${pass}`);
     setTimeout(() => {
         send(`PRIVMSG NickServ :GHOST ${nick} ${pass}`);
@@ -384,9 +389,17 @@ function handle(line) {
         // the account and the nick are not always the same thing — and the
         // two-argument form works whatever nick we happen to be wearing,
         // including hmmm1 after a collision.
-        if (process.env.NICKSERV_PASS) {
-            const acct = (process.env.NICKSERV_ACCOUNT || '').trim();
-            send(`PRIVMSG NickServ :IDENTIFY ${acct ? `${acct} ` : ''}${process.env.NICKSERV_PASS}`);
+        if (nsPass()) {
+            const acct = nsAccount();
+            send(`PRIVMSG NickServ :IDENTIFY ${acct ? `${acct} ` : ''}${nsPass()}`);
+            // The SHAPE of the secret, never the secret. A password stored with
+            // a trailing newline or wrapping quotes is refused by services with
+            // exactly the same "Invalid password" as a wrong one, and this
+            // project has already lost hours to that once — a hand-rolled .env
+            // reader sent the quote marks as part of the key and two working
+            // credentials were declared dead.
+            log('INFO', `identifying as ${acct || '(nick)'} — password is `
+                + `${nsPass().length} chars, ${/^[\x21-\x7e]+$/.test(nsPass()) ? 'no odd characters' : 'CONTAINS SPACES OR CONTROL CHARACTERS'}`);
         }
         setTimeout(startUp, 3000);
         return;
