@@ -130,8 +130,30 @@ function send(line) { try { sock.write(line + '\r\n'); } catch (e) { /* closing 
 // Trimmed at every use. `gh secret set` from a pipe keeps the trailing newline,
 // and IRC would send it as part of the password — refused with the same
 // "Invalid password" a genuinely wrong one gets.
-const nsPass = () => String(process.env.NICKSERV_PASS || '').trim();
-const nsAccount = () => String(process.env.NICKSERV_ACCOUNT || '').trim();
+/**
+ * A secret, cleaned of the things that get stored WITH it by accident.
+ *
+ * trim() is not enough. The exact bug that cost this project two wrong
+ * "rotate your credentials" conclusions was QUOTE MARKS travelling as part of
+ * the value — a .env reader took everything after the "=" and sent "pass"
+ * with the quotes attached, and the services answered "invalid" for a key that was
+ * perfectly good. Somebody typing "mypass" at the gh prompt stores exactly
+ * that, quotes included, and it is invisible in every log because the value
+ * is redacted.
+ *
+ * So: whitespace off, one matching pair of surrounding quotes off, and
+ * nothing else touched — a quote INSIDE a password is a legitimate character
+ * and must survive.
+ */
+function cleanSecret(raw) {
+    let v = String(raw || '').trim();
+    if (v.length >= 2 && ((v[0] === '"' && v.endsWith('"')) || (v[0] === "'" && v.endsWith("'")))) {
+        v = v.slice(1, -1).trim();
+    }
+    return v;
+}
+const nsPass = () => cleanSecret(process.env.NICKSERV_PASS);
+const nsAccount = () => cleanSecret(process.env.NICKSERV_ACCOUNT);
 /**
  * Refuses to speak in a channel. Deliberately.
  *
@@ -398,8 +420,20 @@ function handle(line) {
             // project has already lost hours to that once — a hand-rolled .env
             // reader sent the quote marks as part of the key and two working
             // credentials were declared dead.
-            log('INFO', `identifying as ${acct || '(nick)'} — password is `
-                + `${nsPass().length} chars, ${/^[\x21-\x7e]+$/.test(nsPass()) ? 'no odd characters' : 'CONTAINS SPACES OR CONTROL CHARACTERS'}`);
+            const shape = nsPass();
+            log('INFO', `identifying as ${acct || '(nick)'} — password is ${shape.length} chars`);
+            // A SPACE inside the password cannot work with plain IDENTIFY: IRC
+            // splits on spaces, so services would only ever see the first word.
+            // Nothing downstream can detect this — it looks exactly like a
+            // wrong password — so it has to be said here.
+            if (/\s/.test(shape)) {
+                log('ERR', 'the password contains a SPACE. IDENTIFY cannot send that — '
+                    + 'services will only receive the first word. Change the password.');
+            }
+            if (/^["'].*["']$/.test(String(process.env.NICKSERV_PASS || '').trim())) {
+                log('WARN', 'the stored secret had surrounding quotes — stripped. '
+                    + 'If this still fails, re-set it WITHOUT quotes.');
+            }
         }
         setTimeout(startUp, 3000);
         return;
