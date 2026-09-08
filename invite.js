@@ -124,6 +124,7 @@ let lastError = '';            // the socket's own words, if it had any
 const accountOf = new Map();
 let stopped = false;
 const members = new Map();     // chan(lower) -> Map(nickLower -> {nick, prefix})
+const refusedRooms = new Set(); // rooms that turned us away before we identified
 
 function send(line) { try { sock.write(line + '\r\n'); } catch (e) { /* closing */ } }
 /**
@@ -327,7 +328,14 @@ function handle(line) {
     if (num === '376' || num === '422') {
         registered = true;
         attempts = 0;                              // a good connection clears the count
-        if (process.env.NICKSERV_PASS) send(`PRIVMSG NickServ :IDENTIFY ${process.env.NICKSERV_PASS}`);
+        // IDENTIFY <account> <password> when the account name is set, because
+        // the account and the nick are not always the same thing — and the
+        // two-argument form works whatever nick we happen to be wearing,
+        // including hmmm1 after a collision.
+        if (process.env.NICKSERV_PASS) {
+            const acct = (process.env.NICKSERV_ACCOUNT || '').trim();
+            send(`PRIVMSG NickServ :IDENTIFY ${acct ? `${acct} ` : ''}${process.env.NICKSERV_PASS}`);
+        }
         setTimeout(startUp, 3000);
         return;
     }
@@ -442,7 +450,26 @@ function handle(line) {
         for (const m of members.values()) m.delete(who.toLowerCase());
         return;
     }
+    // Logged in. Retry anything that refused us for not being registered.
+    //
+    // The order is against us: we ask to join a few seconds after sending
+    // IDENTIFY, so a room that only admits registered users answers 474 while
+    // services are still thinking. Without this the bot sits out the one room
+    // the password was added for, and the log looks identical to being banned.
+    if (num === '900' || /^:NickServ!/i.test(line) && /now identified|password accepted|you are now logged in/i.test(line)) {
+        if (refusedRooms.size) {
+            log('OK', `identified — retrying ${[...refusedRooms].join(', ')}`);
+            for (const ch of refusedRooms) { send(`JOIN ${ch}`); send(`NAMES ${ch}`); }
+            refusedRooms.clear();
+        }
+        return;
+    }
     if (/^4\d\d$/.test(num)) {
+        // Remember a room that turned us away, so identifying can un-turn it.
+        if (num === '474' || num === '473' || num === '477') {
+            const ch = (params[1] || '').trim();
+            if (ch.startsWith('#')) refusedRooms.add(ch);
+        }
         const known = {
             401: 'no such nick (they left)',
             403: 'no such channel',

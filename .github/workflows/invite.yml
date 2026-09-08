@@ -68,6 +68,7 @@ jobs:
           node-version: '20'
       - name: Invite
         env:
+          NICKSERV_ACCOUNT: ${{ secrets.NICKSERV_ACCOUNT }}
           NICKSERV_PASS: ${{ secrets.NICKSERV_PASS }}
           IRC_SERVER: ${{ secrets.IRC_SERVER || 'irc.hybridirc.com' }}
           IRC_PORT: ${{ secrets.IRC_PORT || '6697' }}
