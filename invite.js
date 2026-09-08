@@ -187,6 +187,47 @@ let perRound = Math.max(1, Number(process.env.RECRUIT_PER_ROUND || 3));
 const roundAsBuilt = recruiter.inviteRound.bind(recruiter);
 recruiter.inviteRound = (n) => roundAsBuilt(n === undefined ? perRound : n);
 
+/**
+ * Take our name back after services take it away.
+ *
+ * Ported from Dracula, which has needed this for months. If a nick is
+ * registered and the bot is not identified TO THAT NICK, NickServ renames it
+ * to Guest12345 — and then nothing works: rooms that ban Guest* refuse it,
+ * and every command stops arriving because people are still messaging the old
+ * name. The bot has no idea anything is wrong; from the inside it is connected
+ * and idle.
+ *
+ * GHOST kills a stale session still holding the name, RELEASE takes it back
+ * from services' own hold, and only then can NICK succeed. Doing them in the
+ * other order fails silently.
+ */
+function reclaimNick() {
+    const pass = process.env.NICKSERV_PASS;
+    if (!pass) {
+        log('ERR', `renamed to ${me} and no NICKSERV_PASS is set, so I cannot take `
+            + `"${nick}" back. Register the nick and set the secret.`);
+        return;
+    }
+    const acct = (process.env.NICKSERV_ACCOUNT || nick).trim();
+    send(`PRIVMSG NickServ :IDENTIFY ${acct} ${pass}`);
+    setTimeout(() => {
+        send(`PRIVMSG NickServ :GHOST ${nick} ${pass}`);
+        send(`PRIVMSG NickServ :RELEASE ${nick} ${pass}`);
+        send(`NICK ${nick}`);
+        log('INFO', `reclaiming "${nick}"…`);
+    }, 1500);
+}
+
+// Losing the nick is not only a connect-time event: enforcement, a netsplit or
+// a stale ghost can take it at any moment, and the bot is useless while it
+// wears a name nobody is messaging.
+setInterval(() => {
+    if (stopped || !registered) return;
+    if (me.toLowerCase() === nick.toLowerCase()) return;
+    log('WARN', `I am "${me}" but should be "${nick}" — reclaiming.`);
+    reclaimNick();
+}, 60000).unref?.();
+
 function connect() {
     log('INFO', `connecting to ${SERVER}:${PORT} as ${nick}…`);
     const ready = () => {
@@ -311,6 +352,17 @@ function handle(line) {
         log('WARN', `name taken — trying ${me}`);
         send(`NICK ${me}`);
         return;
+    }
+    // Services renaming us to a Guest nick. Act at once — the minute-long
+    // watchdog above is the backstop, not the response.
+    if (p[1] === 'NICK' && who.toLowerCase() === me.toLowerCase()) {
+        const now = (params[0] || '').replace(/^:/, '');
+        if (/^Guest\d+$/i.test(now)) {
+            me = now;
+            log('WARN', `NickServ enforced a rename to ${now} — I was not identified to "${nick}".`);
+            reclaimNick();
+            return;
+        }
     }
     // The server confirms a rename by echoing it back. Until this arrives the
     // old name is still ours, so `me` is only updated here — not when the
