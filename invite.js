@@ -450,6 +450,25 @@ function handle(line) {
         for (const m of members.values()) m.delete(who.toLowerCase());
         return;
     }
+    // What NickServ actually said.
+    //
+    // The bot sent IDENTIFY with a correct-looking account and password, the
+    // login did not take, and WHOIS showed no account — with nothing anywhere
+    // saying why. Services answer every IDENTIFY, with the reason: not
+    // registered, wrong password, or awaiting email verification. Throwing
+    // that away turned a one-line answer into guesswork.
+    if (/^:NickServ!/i.test(line)) {
+        const said = line.slice(line.indexOf(' :') + 2).replace(/\x03\d{0,2}(,\d{1,2})?|\x02|\x1f/g, '');
+        log('NICKSERV', said.slice(0, 200));
+        if (/not registered|isn't registered|is not registered/i.test(said)) {
+            log('ERR', 'that account does not exist — register it, or check NICKSERV_ACCOUNT.');
+        } else if (/incorrect|invalid|failed/i.test(said)) {
+            log('ERR', 'the password was refused — check NICKSERV_PASS.');
+        } else if (/verif|confirm|awaiting|activate/i.test(said)) {
+            log('ERR', 'the account is registered but NOT VERIFIED — finish the email step.');
+        }
+    }
+
     // Logged in. Retry anything that refused us for not being registered.
     //
     // The order is against us: we ask to join a few seconds after sending
