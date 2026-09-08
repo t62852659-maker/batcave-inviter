@@ -23,7 +23,7 @@ on:
       nick:
         description: 'What the bot is called on IRC (it identifies to NickServ as this)'
         required: true
-        default: 'hmmm'
+        default: 'hunk'
       room:
         description: 'The room it invites people INTO (you need ops there if it is +i)'
         required: true
@@ -79,7 +79,7 @@ jobs:
           # cron restart would come up with empty settings and sit in nothing,
           # inviting nobody, looking alive. Set the secrets and the bot keeps
           # its configuration across every handover on its own.
-          INV_NICK: ${{ inputs.nick || secrets.INVITER_NICK || 'hmmm' }}
+          INV_NICK: ${{ inputs.nick || secrets.INVITER_NICK || 'hunk' }}
           INV_ROOM: ${{ inputs.room || secrets.INVITER_ROOM || '#room' }}
           INV_SOURCES: ${{ inputs.sources || secrets.INVITER_SOURCES || '#chatsansar,#desiadda,#allindiachat.com' }}
           RECRUIT_TARGET: ${{ inputs.target || secrets.RECRUIT_TARGET || 'feminine' }}
