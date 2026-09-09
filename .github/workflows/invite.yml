@@ -39,9 +39,9 @@ on:
         type: choice
         options: [feminine, other, all]
       landing:
-        description: 'The room it sits in, idle, waiting to be told to start'
-        required: true
-        default: '#room'
+        description: 'Optional extra room to sit in. It already sits in the source rooms.'
+        required: false
+        default: ''
       dry_run:
         description: 'Check it starts and connects, then stop without inviting anyone'
         required: false
@@ -89,7 +89,7 @@ jobs:
           RECRUIT_REASK_DAYS: ${{ secrets.RECRUIT_REASK_DAYS || '21' }}
           FEMININE_HINTS: ${{ secrets.FEMININE_HINTS }}
           DRY_RUN: ${{ inputs.dry_run }}
-          LANDING_ROOM: ${{ inputs.landing || secrets.INVITER_LANDING || '#room' }}
+          LANDING_ROOM: ${{ inputs.landing || secrets.INVITER_LANDING || '' }}
           # Kept only as a fallback. Control is now granted by saying
           # "!hi active" to the bot from any nick, which is what the list of
           # named nicks kept failing at: the owner is usually wearing a third

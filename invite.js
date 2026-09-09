@@ -73,7 +73,10 @@ const USE_TLS = !/^(0|off|false|no)$/i.test(process.env.IRC_TLS || 'on');
 // Where it lands and sits, quietly, until it is told to work.
 // let, not const: "land #room" moves it, so the rooms are decided on IRC
 // rather than by editing a file and restarting.
-let LANDING_ROOM = (process.env.LANDING_ROOM || '#room').trim();
+// Empty by default. There is no separate "landing" room to invent: the bot
+// already sits in the rooms it watches, and joining an extra placeholder
+// channel just put it somewhere nobody meant it to be.
+let LANDING_ROOM = (process.env.LANDING_ROOM || '').trim();
 // Who may tell it. Orders arrive as a private message TO the bot, never in a
 // channel: a command typed in a room is read by the room, and "start inviting
 // from here" is not a thing to announce to the people about to be invited.
@@ -699,7 +702,10 @@ function startUp() {
         // two named nicks and a services account — long after "!hi active"
         // replaced it, which is the kind of stale instruction that has people
         // typing the wrong thing at a bot that is working fine.
-        log('INFO', `idle in ${LANDING_ROOM}. DM me "!hi active", then "!help".`);
+        // Name the rooms it is ACTUALLY in. "idle in #room" was pointing at a
+        // placeholder while it sat in three real rooms nobody was told about.
+        log('INFO', `idle in ${recruiter.channels.join(', ')}`
+            + `${LANDING_ROOM ? ` and ${LANDING_ROOM}` : ''}. DM me "!hi active", then "!help".`);
     }
     // The member lists go stale as people come and go; refresh them the way
     // the live bot does rather than trusting one NAMES from startup.
