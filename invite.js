@@ -808,8 +808,10 @@ function command(line, reply) {
             const ch = arg.split(/\s+/)[0];
             send(`JOIN ${ch}`);
             send(`NAMES ${ch}`);
-            out(`joining ${ch}. It is not a source room unless you say `
-                + `"from" — this is just sitting there.`);
+            // Every room it sits in is a source now, so saying otherwise was
+            // simply wrong — and a wrong instruction has people typing extra
+            // commands at a bot that has already done the thing.
+            out(`joining ${ch}. I will invite people from here too.`);
             return;
         }
         case 'leave':
@@ -831,66 +833,44 @@ function command(line, reply) {
         // is what "from" and "into" and "start" as three separate commands
         // kept getting wrong.
         case 'invite': {
-            // "!invite 20" and nothing else is the normal case.
+            // "!invite 20". There is no other form.
             //
-            // Naming rooms was not just tedious, it was often impossible: the
-            // network's spam filter refuses to deliver a private message
-            // containing something that looks like a URL, so "#allindiachat.com"
-            // came back as "Your message to this user was blocked: Blocked
-            // content." The owner tried breaking the word up to get past it.
+            // Naming rooms was not merely tedious, it was often impossible:
+            // the network's spam filter refuses to deliver a private message
+            // containing anything that looks like a URL, so "#allindiachat.com"
+            // never reached the bot at all.
             //
-            // The rooms are already known — the sources it is watching, and
-            // the room it holds ops in, which is by definition the one it can
-            // invite people to.
-            const bare = /^(\d+)\s*$/.exec(arg);
-            const m = bare || /^(\d+)\s+from\s+(\S+)\s+to\s+(\S+)$/i.exec(arg)
-                || /^(\d+)\s+(\S+)\s+(\S+)$/.exec(arg);
-            if (!m) { out('!invite 20   (or: !invite 20 from #a to #b)'); return; }
-            const n = Math.max(1, Math.min(50, parseInt(m[1], 10)));
-            let src;
-            let dst;
-            if (bare) {
-                // Where it can actually invite: a room it holds ops in. If it
-                // is opped in several, the configured one wins; otherwise the
-                // only one there is.
-                const oppedRooms = [...opped];
-                dst = oppedRooms.find((c) => c === String(room).toLowerCase())
-                    ? room
-                    : (oppedRooms.length === 1 ? oppedRooms[0] : '');
-                if (!dst) {
-                    out(oppedRooms.length
-                        ? `I hold ops in ${oppedRooms.length} rooms — say which: !invite ${n} from #a to #b`
-                        : 'I am not opped anywhere, so I cannot invite. Op me first, then !invite.');
-                    return;
-                }
-                if (!recruiter.channels.length) {
-                    out('no source rooms — !invite 20 from #a to #b');
-                    return;
-                }
-                armed = true;
-                out(`${n} into ${dst}.`);
-                setTimeout(() => {
-                    const got = recruiter.inviteRound(n);
-                    out(typeof got === 'number' && got >= 0 ? `Sent ${got}.` : 'Sent.');
-                }, 4000);
+            // It does not need telling. It invites from EVERY room it is
+            // sitting in, into the room it holds ops in — which is by
+            // definition the only room it can invite anybody to.
+            const n = Math.max(1, Math.min(50, parseInt(arg, 10) || 0));
+            if (!n) { out('!invite 20'); return; }
+
+            const oppedRooms = [...opped];
+            const dst = oppedRooms.includes(String(room).toLowerCase())
+                ? room
+                : (oppedRooms.length === 1 ? oppedRooms[0] : '');
+            if (!dst) {
+                out(oppedRooms.length
+                    ? `I hold ops in ${oppedRooms.length} rooms. Op me in only the one you want.`
+                    : 'I am not opped anywhere, so I cannot invite. Op me first.');
                 return;
             }
-            src = m[2].startsWith('#') ? m[2] : `#${m[2]}`;
-            dst = m[3].startsWith('#') ? m[3] : `#${m[3]}`;
+            // Everywhere it is sitting, except the room they are going TO.
+            const from = [...members.keys()].filter((c) => c !== String(dst).toLowerCase());
+            if (!from.length) {
+                out('I am not in any other room to find people in. !join #room first.');
+                return;
+            }
             room = dst;
-            recruiter.channels = [src];
-            send(`JOIN ${src}`); send(`NAMES ${src}`);
-            send(`JOIN ${dst}`); send(`NAMES ${dst}`);
+            recruiter.channels = from;
             armed = true;
-            out(`${src} → ${dst}, ${n} of them.`);
-            // Wait for NAMES. Inviting before the member list arrives asks an
-            // empty room and reports "nobody eligible", which reads as the bot
-            // refusing rather than as it not having looked yet.
+            out(`${n} into ${dst}, from ${from.length} room${from.length === 1 ? '' : 's'}.`);
+            // Member lists can be stale; refresh before asking who is there.
+            for (const c of from) send(`NAMES ${c}`);
             setTimeout(() => {
                 const got = recruiter.inviteRound(n);
-                out(typeof got === 'number' && got >= 0
-                    ? `Sent ${got}.`
-                    : 'Sent.');
+                out(typeof got === 'number' && got >= 0 ? `Sent ${got}.` : 'Sent.');
             }, 4000);
             return;
         }
