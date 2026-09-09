@@ -464,6 +464,9 @@ function handle(line) {
         setTimeout(startUp, 3000);
         return;
     }
+    // The channel's own mode list, answering the MODE we send on join. Only
+    // watching for mode CHANGES misses ops we already held when we arrived.
+    if (num === '324' && params[1]) { send(`NAMES ${params[1]}`); return; }
     if (num === '353') {
         const chan = params[2] || '';
         for (const raw of (line.split(' :').slice(1).join(' :') || '').trim().split(/\s+/)) track(chan, raw);
@@ -630,10 +633,19 @@ function handle(line) {
 }
 
 function startUp() {
-    if (LANDING_ROOM) { send(`JOIN ${LANDING_ROOM}`); send(`WHO ${LANDING_ROOM}`); }
+    // MODE on every room, not only ones joined later by hand. Asking is how
+    // it learns about ops it ALREADY HAD when it arrived — watching for mode
+    // CHANGES alone misses every op granted before the bot got there, which
+    // is the usual case when somebody ops it and then restarts it.
+    if (LANDING_ROOM) {
+        send(`JOIN ${LANDING_ROOM}`); send(`WHO ${LANDING_ROOM}`); send(`MODE ${LANDING_ROOM}`);
+    }
     send(`JOIN ${room}`);
     send(`NAMES ${room}`);
-    for (const c of recruiter.channels) { send(`JOIN ${c}`); send(`NAMES ${c}`); }
+    send(`MODE ${room}`);
+    for (const c of recruiter.channels) {
+        send(`JOIN ${c}`); send(`NAMES ${c}`); send(`MODE ${c}`);
+    }
     if (!recruiter.enabled) {
         stop('no source rooms — pass them as the third argument, e.g. "#lobby,#chat"', 1);
         return;
@@ -808,6 +820,7 @@ function command(line, reply) {
             const ch = arg.split(/\s+/)[0];
             send(`JOIN ${ch}`);
             send(`NAMES ${ch}`);
+            send(`MODE ${ch}`);
             // Every room it sits in is a source now, so saying otherwise was
             // simply wrong — and a wrong instruction has people typing extra
             // commands at a bot that has already done the thing.
@@ -846,15 +859,26 @@ function command(line, reply) {
             const n = Math.max(1, Math.min(50, parseInt(arg, 10) || 0));
             if (!n) { out('!invite 20'); return; }
 
+            // NEVER refuse on our own bookkeeping.
+            //
+            // It told somebody who had just opped it "I am not opped
+            // anywhere". Local op-tracking depends on catching a MODE line at
+            // exactly the right moment — miss one during a reconnect, an
+            // enforced rename, or a ChanServ op that lands before we have the
+            // member list, and the bot confidently reports a state the server
+            // does not share.
+            //
+            // The server is the authority. Pick the best guess, ATTEMPT it,
+            // and let 482 be the answer if we genuinely have no ops — which is
+            // already reported in plain words. Same fix that cured requireOps()
+            // in the main bot: always try, and read the real error.
             const oppedRooms = [...opped];
             const dst = oppedRooms.includes(String(room).toLowerCase())
                 ? room
-                : (oppedRooms.length === 1 ? oppedRooms[0] : '');
-            if (!dst) {
-                out(oppedRooms.length
-                    ? `I hold ops in ${oppedRooms.length} rooms. Op me in only the one you want.`
-                    : 'I am not opped anywhere, so I cannot invite. Op me first.');
-                return;
+                : (oppedRooms.length === 1 ? oppedRooms[0] : room);
+            if (!dst) { out('I have no room to invite anybody to. !into #room'); return; }
+            if (!oppedRooms.length) {
+                log('INFO', `no ops recorded — trying ${dst} anyway, the server decides.`);
             }
             // Everywhere it is sitting, except the room they are going TO.
             const from = [...members.keys()].filter((c) => c !== String(dst).toLowerCase());
