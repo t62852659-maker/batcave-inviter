@@ -33,10 +33,11 @@ const argv = process.argv.slice(2);
 const nick = argv[0];
 // let, not const: the target room is changeable from IRC with "into #room",
 // so the bot never has to be redeployed to point it somewhere else.
-let room = argv[1];
+// May be empty. There is no default room: the bot invites where it is taken.
+let room = (argv[1] || '').startsWith('#') ? argv[1] : '';
 const sources = (argv[2] || '').split(',').map((s) => s.trim()).filter(Boolean);
 
-if (!nick || !room || !room.startsWith('#')) {
+if (!nick) {
     console.error(`
   Usage:  node invite.js <nick> <#room> [#source,#source...]
 
@@ -93,7 +94,10 @@ const OPEN_CONTROL = /^(1|true|yes|on)$/i.test(process.env.OPEN_CONTROL || '');
 // he can say from ANY nick fixes that, while still leaving the bot silent to
 // the rest of the network: a stranger gets nothing back, not a refusal that
 // explains what to type next.
-const active = new Set();
+// lowercase nick -> the nick AS THEY WROTE IT, so replies address people the
+// way they are actually called. A Set of folded nicks meant the bot answered
+// "hunk1" to somebody called "Hunk1" — delivered fine, reads like a machine.
+const active = new Map();
 // Moderation is OFF until switched on, and only ever acts where the bot
 // actually holds ops. A bot that tries to moderate a room it has no power in
 // produces a stream of "you're not channel operator" and nothing else, which
@@ -531,7 +535,7 @@ function handle(line) {
 
         // The one thing that wakes it up.
         if (/^!?hi\s+active$/i.test(text)) {
-            active.add(from);
+            active.set(from, who);
             answer('Active. !help for commands.');
             log('CMD', `${who} is active.`);
             return;
@@ -626,8 +630,19 @@ function handle(line) {
             482: `you are not an operator in ${room} — INVITE needs ops there`,
         };
         log('WARN', `${num}: ${known[num] || line.slice(0, 120)}`);
+        // NEVER quit over a channel refusing us.
+        //
+        // 442 and 482 called stop(), so pointing the bot at a room it had not
+        // joined yet shut the whole thing down — the owner changed the target
+        // room and the bot vanished from IRC. A room saying no is ordinary
+        // news about ONE room; the bot is still connected, still in every
+        // other room, and still perfectly able to work.
         if (num === '482' || num === '442') {
-            stop(`cannot invite to ${room}: ${known[num]}. Op yourself there and rerun.`, 1);
+            const fix = num === '482'
+                ? `I have no ops in ${room}. /msg ChanServ OP ${room} ${me}`
+                : `I am not in ${room}. !join ${room} first, or !into a room I am in.`;
+            for (const cn of active.values()) send(`PRIVMSG ${cn} :${fix}`);
+            log('WARN', fix);
         }
     }
 }
@@ -640,9 +655,10 @@ function startUp() {
     if (LANDING_ROOM) {
         send(`JOIN ${LANDING_ROOM}`); send(`WHO ${LANDING_ROOM}`); send(`MODE ${LANDING_ROOM}`);
     }
-    send(`JOIN ${room}`);
-    send(`NAMES ${room}`);
-    send(`MODE ${room}`);
+    // Only if there IS one. With no default room, "JOIN " on its own is a
+    // malformed line the server answers with 461 — noise that looks like a
+    // fault and is not.
+    if (room) { send(`JOIN ${room}`); send(`NAMES ${room}`); send(`MODE ${room}`); }
     for (const c of recruiter.channels) {
         send(`JOIN ${c}`); send(`NAMES ${c}`); send(`MODE ${c}`);
     }
@@ -767,10 +783,17 @@ function command(line, reply) {
             stop('told to stop');
             return;
         case 'into': {
-            if (!arg.startsWith('#')) { out(`inviting into ${room}. Use: into #room`); return; }
+            if (!arg.startsWith('#')) {
+                out(room ? `inviting into ${room}. Use: into #room` : 'Use: into #room');
+                return;
+            }
             room = arg.split(/\s+/)[0];
-            out(`invitations now point at ${room}. I need ops there if it is +i — `
-                + 'invite me and op me, then say start.');
+            // JOIN it. Pointing invitations at a room it is not in produced
+            // 442 on every attempt, and 442 used to be fatal.
+            send(`JOIN ${room}`);
+            send(`NAMES ${room}`);
+            send(`MODE ${room}`);
+            out(`invitations now go to ${room}. Op me there and say !invite 20.`);
             log('OK', `target room changed to ${room}`);
             return;
         }
@@ -872,11 +895,17 @@ function command(line, reply) {
             // and let 482 be the answer if we genuinely have no ops — which is
             // already reported in plain words. Same fix that cured requireOps()
             // in the main bot: always try, and read the real error.
+            // No default room. It invites where it has been TAKEN, which is
+            // either the room it holds ops in or the one named with !into —
+            // never a placeholder from a config file that points at nothing.
             const oppedRooms = [...opped];
             const dst = oppedRooms.includes(String(room).toLowerCase())
                 ? room
                 : (oppedRooms.length === 1 ? oppedRooms[0] : room);
-            if (!dst) { out('I have no room to invite anybody to. !into #room'); return; }
+            if (!dst) {
+                out('Take me to a room first: !into #theroom (and op me there).');
+                return;
+            }
             if (!oppedRooms.length) {
                 log('INFO', `no ops recorded — trying ${dst} anyway, the server decides.`);
             }

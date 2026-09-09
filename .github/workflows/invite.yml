@@ -25,9 +25,9 @@ on:
         required: true
         default: 'hunk'
       room:
-        description: 'The room it invites people INTO (you need ops there if it is +i)'
-        required: true
-        default: '#room'
+        description: 'Optional. Leave blank and use !into #room once it is up.'
+        required: false
+        default: ''
       sources:
         description: 'Rooms to find people IN, comma separated'
         required: true
@@ -80,7 +80,7 @@ jobs:
           # inviting nobody, looking alive. Set the secrets and the bot keeps
           # its configuration across every handover on its own.
           INV_NICK: ${{ inputs.nick || secrets.INVITER_NICK || 'hunk' }}
-          INV_ROOM: ${{ inputs.room || secrets.INVITER_ROOM || '#room' }}
+          INV_ROOM: ${{ inputs.room || secrets.INVITER_ROOM || '' }}
           INV_SOURCES: ${{ inputs.sources || secrets.INVITER_SOURCES || '#chatsansar,#desiadda,#allindiachat.com' }}
           RECRUIT_TARGET: ${{ inputs.target || secrets.RECRUIT_TARGET || 'feminine' }}
           RECRUIT_PER_ROUND: ${{ secrets.RECRUIT_PER_ROUND || '3' }}
