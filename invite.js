@@ -831,12 +831,52 @@ function command(line, reply) {
         // is what "from" and "into" and "start" as three separate commands
         // kept getting wrong.
         case 'invite': {
-            const m = /^(\d+)\s+from\s+(\S+)\s+to\s+(\S+)$/i.exec(arg)
+            // "!invite 20" and nothing else is the normal case.
+            //
+            // Naming rooms was not just tedious, it was often impossible: the
+            // network's spam filter refuses to deliver a private message
+            // containing something that looks like a URL, so "#allindiachat.com"
+            // came back as "Your message to this user was blocked: Blocked
+            // content." The owner tried breaking the word up to get past it.
+            //
+            // The rooms are already known — the sources it is watching, and
+            // the room it holds ops in, which is by definition the one it can
+            // invite people to.
+            const bare = /^(\d+)\s*$/.exec(arg);
+            const m = bare || /^(\d+)\s+from\s+(\S+)\s+to\s+(\S+)$/i.exec(arg)
                 || /^(\d+)\s+(\S+)\s+(\S+)$/.exec(arg);
-            if (!m) { out('!invite 20 from #room1 to #room2'); return; }
+            if (!m) { out('!invite 20   (or: !invite 20 from #a to #b)'); return; }
             const n = Math.max(1, Math.min(50, parseInt(m[1], 10)));
-            const src = m[2].startsWith('#') ? m[2] : `#${m[2]}`;
-            const dst = m[3].startsWith('#') ? m[3] : `#${m[3]}`;
+            let src;
+            let dst;
+            if (bare) {
+                // Where it can actually invite: a room it holds ops in. If it
+                // is opped in several, the configured one wins; otherwise the
+                // only one there is.
+                const oppedRooms = [...opped];
+                dst = oppedRooms.find((c) => c === String(room).toLowerCase())
+                    ? room
+                    : (oppedRooms.length === 1 ? oppedRooms[0] : '');
+                if (!dst) {
+                    out(oppedRooms.length
+                        ? `I hold ops in ${oppedRooms.length} rooms — say which: !invite ${n} from #a to #b`
+                        : 'I am not opped anywhere, so I cannot invite. Op me first, then !invite.');
+                    return;
+                }
+                if (!recruiter.channels.length) {
+                    out('no source rooms — !invite 20 from #a to #b');
+                    return;
+                }
+                armed = true;
+                out(`${n} into ${dst}.`);
+                setTimeout(() => {
+                    const got = recruiter.inviteRound(n);
+                    out(typeof got === 'number' && got >= 0 ? `Sent ${got}.` : 'Sent.');
+                }, 4000);
+                return;
+            }
+            src = m[2].startsWith('#') ? m[2] : `#${m[2]}`;
+            dst = m[3].startsWith('#') ? m[3] : `#${m[3]}`;
             room = dst;
             recruiter.channels = [src];
             send(`JOIN ${src}`); send(`NAMES ${src}`);
@@ -893,7 +933,7 @@ function command(line, reply) {
         }
         case 'help':
         default:
-            out('!invite 20 from #room1 to #room2  ·  !join #room  ·  !part #room');
+            out('!invite 20  ·  !join #room  ·  !part #room');
             out('also: !stop !pause !status !rooms !per <n> !target all !mod on !nick <name>');
             return;
     }
