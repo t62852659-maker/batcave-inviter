@@ -175,8 +175,34 @@ function say(chan, text) {
     send(`PRIVMSG ${chan} :${text}`);
 }
 
+/**
+ * Is the server refusing US — or just reporting somebody else's day?
+ *
+ * This matched "z-line" ANYWHERE in the line, so this killed the bot:
+ *
+ *   :PinkyfrmGujarat!PinkyfrmGu@… QUIT :Z-lined: You have a host listed in
+ *   the DroneBL.
+ *
+ * A stranger in a shared channel was banned, the server told the room, and
+ * the bot read it as its own death sentence and shut down — after an hour of
+ * working perfectly. In busy rooms somebody is Z-lined or DroneBL'd every few
+ * minutes, so this was a bot that could never stay up for long, for reasons
+ * that had nothing to do with it.
+ *
+ * The fix is to ask WHO the line is about, which is what the prefix is for.
+ */
 function isFatal(line) {
-    return /z-?line|k-?line|g-?line|too many times in too short|^ERROR/i.test(line);
+    // No prefix means the server is talking directly to us.
+    if (/^ERROR/i.test(line)) return true;
+    // A prefixed QUIT / KILL / PART / NICK is news about a named person.
+    // If that person is not us, it is not our problem however alarming it reads.
+    // 465 is ERR_YOUREBANNEDCREEP — the server telling US we are banned from
+    // it. Neither version of this caught that, so a server-level ban would
+    // have been retried until the attempt budget ran out.
+    if (/^:\S+ 465\b/.test(line)) return true;
+    const about = /^:([^!\s]+)\S*\s+(QUIT|KILL|PART|NICK|JOIN|PRIVMSG|NOTICE)\b/i.exec(line);
+    if (about && about[1].toLowerCase() !== me.toLowerCase()) return false;
+    return /z-?line|k-?line|g-?line|too many times in too short/i.test(line);
 }
 
 function stop(why, code = 0) {
