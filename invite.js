@@ -332,7 +332,25 @@ function connect() {
                 + `(attempt ${attempts}). The server refused us without saying why, `
                 + 'which usually means the address is throttled or banned.');
         }
+        // Never registered? The ADDRESS is the problem, and retrying cannot
+        // fix it — a runner keeps one IP for its whole life, so attempts 2, 3
+        // and 4 dial the exact address that was just refused. Four attempts
+        // over six minutes, all guaranteed to fail, while the owner waits.
+        //
+        // HybridIRC drops some datacenter ranges before the TLS handshake
+        // completes (DroneBL and similar lists carry a lot of cloud IPs).
+        // Dracula runs from the same infrastructure and connects fine, so a
+        // clean address is luck of the draw — and the only way to draw again
+        // is a NEW RUN.
+        if (!registered && attempts >= 2) {
+            stop('this runner\'s address is refused by the server. Retrying here '
+                + 'cannot help — the IP is fixed for the life of the run. Start '
+                + 'another run to get a different one.', 1);
+            return;
+        }
         if (attempts >= 6) { stop('six failed connections — giving up this run', 1); return; }
+        // A connection that WORKED and then dropped is worth retrying: same
+        // address, but the fault was transient.
         const wait = Math.min(30000 * attempts, 180000);
         log('INFO', `reconnecting in ${Math.round(wait / 1000)}s…`);
         setTimeout(() => { if (!stopped) connect(); }, wait);
