@@ -98,6 +98,10 @@ jobs:
           # command the bot — repoint it, switch moderation off, shut it down.
           # Off unless you mean it.
           OPEN_CONTROL: ${{ secrets.OPEN_CONTROL }}
+          # What somebody must say to command the bot. This repository is
+          # public, so the phrase must NOT live in the source — anybody able
+          # to read the code would be reading the key to the bot.
+          ACTIVATE_PHRASE: ${{ secrets.ACTIVATE_PHRASE }}
         # Through the ENVIRONMENT, never interpolated into the command line.
         # "${{ inputs.nick }}" pasted straight into a shell is a command
         # injection: anybody who can press Run workflow can type a nick that

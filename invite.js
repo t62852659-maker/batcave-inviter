@@ -101,6 +101,8 @@ const OPEN_CONTROL = /^(1|true|yes|on)$/i.test(process.env.OPEN_CONTROL || '');
 // way they are actually called. A Set of folded nicks meant the bot answered
 // "hunk1" to somebody called "Hunk1" — delivered fine, reads like a machine.
 const active = new Map();
+// What somebody must say to be listened to. In a secret, not in the source.
+const ACTIVATE = (process.env.ACTIVATE_PHRASE || 'hi active').trim();
 // Moderation is OFF until switched on, and only ever acts where the bot
 // actually holds ops. A bot that tries to moderate a room it has no power in
 // produces a stream of "you're not channel operator" and nothing else, which
@@ -537,7 +539,19 @@ function handle(line) {
         const answer = (m) => send(`PRIVMSG ${who} :${m}`);
 
         // The one thing that wakes it up.
-        if (/^!?hi\s+active$/i.test(text)) {
+        //
+        // The phrase itself lives in a secret, because this repository is
+        // PUBLIC — it has to be, or Actions meters its minutes and the bot
+        // dies three seconds into every run once the month's budget is gone.
+        // A public repo means anybody can read the code, and if the phrase
+        // were written here they would be reading the key to the bot: !stop,
+        // !into, !invite, all of it.
+        //
+        // Set ACTIVATE_PHRASE to something only you know. The default below
+        // is deliberately the obvious one so a misconfigured deployment fails
+        // OPEN rather than locking the owner out of his own bot — but it is
+        // public knowledge, so set the secret.
+        if (new RegExp(`^!?${ACTIVATE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(text)) {
             active.set(from, who);
             answer('Active. !help for commands.');
             log('CMD', `${who} is active.`);
