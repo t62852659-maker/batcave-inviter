@@ -1,23 +1,19 @@
 name: Inviter
 
-# It just sits there, the way Dracula does.
+# Started BY HAND. Never on a timer.
 #
-# Every ten minutes: if the previous run has ended, start a fresh one. With
-# cancel-in-progress:false the cron does NOT kill a running bot — the new run
-# waits and takes over when the current one hits its 350-minute timeout. That
-# is continuous presence with one short handover roughly every six hours,
-# rather than a restart every ten minutes.
+# It ran every ten minutes and failed every ten minutes: each scheduled run
+# dialled an address range the server keeps refusing, gave up after six
+# attempts, and marked the run red. Nobody was watching those, nobody wanted
+# them, and every attempt was another connection against a host that had
+# already said no.
 #
-# Ten, not five. Dracula's five-minute cron is fine for ONE bot; this is
-# another connection from the same GitHub address range that already earned a
-# Z-line today ("connect too many times in too short a duration"), and a
-# handover that arrives twice as often is twice the connection traffic for no
-# extra coverage.
+# A bot you start deliberately cannot fail in the background, and the only
+# runs in the history are ones somebody meant.
 #
-# Still no PUSH trigger. Editing a comment must never reconnect a live bot.
+# There is no push trigger either: editing a comment must never reconnect a
+# live bot.
 on:
-  schedule:
-    - cron: '*/10 * * * *'
   workflow_dispatch:
     inputs:
       nick:
@@ -74,11 +70,10 @@ jobs:
           IRC_PORT: ${{ secrets.IRC_PORT || '6697' }}
           # inputs -> secrets -> literal.
           #
-          # A SCHEDULED run has no inputs at all — they are only populated when
-          # somebody presses Run workflow — so without the middle link every
-          # cron restart would come up with empty settings and sit in nothing,
-          # inviting nobody, looking alive. Set the secrets and the bot keeps
-          # its configuration across every handover on its own.
+          # Inputs are filled in when you press Run workflow or pass -f on the
+          # command line. Set the secrets instead and a bare "gh workflow run"
+          # with no flags comes up correctly configured, which is the whole
+          # point of a one-word start.
           INV_NICK: ${{ inputs.nick || secrets.INVITER_NICK || 'hunk' }}
           INV_ROOM: ${{ inputs.room || secrets.INVITER_ROOM || '' }}
           INV_SOURCES: ${{ inputs.sources || secrets.INVITER_SOURCES || '#chatsansar,#desiadda,#allindiachat.com' }}
