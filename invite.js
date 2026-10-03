@@ -123,6 +123,10 @@ const strip = (l) => (l.startsWith('@') ? l.slice(l.indexOf(' ') + 1) : l);
 
 let sock = null;
 let me = nick;
+// The name we WANT to hold. Starts as the configured nick, but the owner can
+// change it live with `nick <name>` and it STICKS — the watchdog reclaims to
+// THIS, not the fixed config nick, so a manual rename no longer reverts.
+let desired = nick;
 let pendingNick = '';
 let nickTries = 0;
 let attempts = 0;              // connections tried this run
@@ -264,8 +268,13 @@ recruiter.inviteRound = (n) => roundAsBuilt(n === undefined ? perRound : n);
  * other order fails silently.
  */
 function reclaimNick() {
+    // Reclaim toward `desired`, which may be the registered config nick or a
+    // manual name the owner set. GHOST/RELEASE only make sense for the
+    // registered base — for a plain manual name a bare NICK is enough.
+    const reclaimingBase = desired.toLowerCase() === nick.toLowerCase();
     const pass = nsPass();
     if (!pass) {
+        if (!reclaimingBase) { send(`NICK ${desired}`); return; }   // manual name needs no services
         log('ERR', `renamed to ${me} and no NICKSERV_PASS is set, so I cannot take `
             + `"${nick}" back. Register the nick and set the secret.`);
         return;
@@ -273,10 +282,12 @@ function reclaimNick() {
     const acct = nsAccount() || nick;
     send(`PRIVMSG NickServ :IDENTIFY ${acct} ${pass}`);
     setTimeout(() => {
-        send(`PRIVMSG NickServ :GHOST ${nick} ${pass}`);
-        send(`PRIVMSG NickServ :RELEASE ${nick} ${pass}`);
-        send(`NICK ${nick}`);
-        log('INFO', `reclaiming "${nick}"…`);
+        if (reclaimingBase) {
+            send(`PRIVMSG NickServ :GHOST ${nick} ${pass}`);
+            send(`PRIVMSG NickServ :RELEASE ${nick} ${pass}`);
+        }
+        send(`NICK ${desired}`);
+        log('INFO', `reclaiming "${desired}"…`);
     }, 1500);
 }
 
@@ -285,10 +296,10 @@ function reclaimNick() {
 // wears a name nobody is messaging.
 setInterval(() => {
     if (stopped || !registered) return;
-    if (me.toLowerCase() === nick.toLowerCase()) return;
-    log('WARN', `I am "${me}" but should be "${nick}" — reclaiming.`);
+    if (me.toLowerCase() === desired.toLowerCase()) return;
+    log('WARN', `I am "${me}" but should be "${desired}" — reclaiming.`);
     reclaimNick();
-}, 60000).unref?.();
+}, Number(process.env.NICK_WATCH_MS) || 60000).unref?.();
 
 function connect() {
     log('INFO', `connecting to ${SERVER}:${PORT} as ${nick}…`);
@@ -451,8 +462,12 @@ function handle(line) {
     if (p[1] === 'NICK' && who.toLowerCase() === me.toLowerCase()) {
         const now = (params[0] || '').replace(/^:/, '');
         if (now) {
+            // A manual rename (owner's `nick <name>`) becomes the new TARGET, so
+            // the watchdog keeps it instead of reverting to the config nick.
+            const wasManual = pendingNick && now.toLowerCase() === pendingNick.toLowerCase();
             log('OK', `renamed: ${me} -> ${now}`);
             me = now;
+            if (wasManual) { desired = now; log('OK', `holding "${now}" — it will not revert.`); }
             pendingNick = '';
         }
         return;

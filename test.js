@@ -194,6 +194,14 @@ run({}, (r) => {
               n.out.split('\n').filter((l) => /renam|NICK/i.test(l)).join(' | ') || '(nothing happened)');
             c('and it keeps recruiting afterwards', /INVITE /.test(n.invites),
               'a rename must not stop the job');
+            // The revert bug: the 60s watchdog used to reclaim the CONFIG nick,
+            // so a manual rename was undone a minute later. These pin the fix —
+            // the watchdog now targets `desired`, and a manual rename sets it.
+            const invSrc = fs.readFileSync(path.join(__dirname, 'invite.js'), 'utf8');
+            c('a manual rename STICKS — the watchdog targets `desired`, not the config nick',
+              /me\.toLowerCase\(\) === desired\.toLowerCase\(\)/.test(invSrc),
+              'otherwise the watchdog reverts every manual nick change after 60s');
+            c('and a manual rename updates that target', /desired = now/.test(invSrc));
 
             console.log('\n— a name that is already taken —');
             run({}, (t) => {
