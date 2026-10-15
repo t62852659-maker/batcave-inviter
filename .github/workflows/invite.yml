@@ -19,7 +19,7 @@ on:
       nick:
         description: 'What the bot is called on IRC (it identifies to NickServ as this)'
         required: true
-        default: 'hunk'
+        default: 'Guest8897'
       room:
         description: 'Optional. Leave blank and use !into #room once it is up.'
         required: false
@@ -74,7 +74,7 @@ jobs:
           # command line. Set the secrets instead and a bare "gh workflow run"
           # with no flags comes up correctly configured, which is the whole
           # point of a one-word start.
-          INV_NICK: ${{ inputs.nick || secrets.INVITER_NICK || 'hunk' }}
+          INV_NICK: ${{ inputs.nick || secrets.INVITER_NICK || 'Guest8897' }}
           INV_ROOM: ${{ inputs.room || secrets.INVITER_ROOM || '' }}
           INV_SOURCES: ${{ inputs.sources || secrets.INVITER_SOURCES || '#chatsansar,#desiadda,#allindiachat.com' }}
           RECRUIT_TARGET: ${{ inputs.target || secrets.RECRUIT_TARGET || 'feminine' }}
